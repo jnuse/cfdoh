@@ -4,10 +4,10 @@
 
 ## 批 1: 基础层 (wire, config)
 
-- [ ] go.mod 初始化 (module github.com/jnuse/cfdoh, Go 1.23, 依赖 x/sync)
-- [ ] internal/wire: 类型 (Packet/Record/RData sealed), Parse/Encode, name 编解码 (压缩指针 + 防环), CanonicalName/MatchDomain, ParseIPv4/ParseIPv6, MakeServfail/PatchID/ResponseTTL/RotateAddresses, SvcParam 读写 (DescribeHTTPS/UpsertSvcParam)
-- [ ] internal/wire 测试: refer packet 用例移植 + 攻击包 + 全类型往返
-- [ ] internal/config: 环境变量 + 文件合并, 钳制, SanitizedSummary; 测试覆盖钳制边界与优先级
+- [x] go.mod 初始化 (module github.com/jnuse/cfdoh, Go 1.23, 依赖 x/sync)
+- [x] internal/wire: 类型 (Packet/Record/RData sealed), Parse/Encode, name 编解码 (压缩指针 + 防环), CanonicalName/MatchDomain, ParseIPv4/ParseIPv6, MakeServfail/PatchID/ResponseTTL/RotateAddresses, SvcParam 读写 (DescribeHTTPS/UpsertSvcParam)
+- [x] internal/wire 测试: refer packet 用例移植 + 攻击包 + 全类型往返
+- [x] internal/config: 环境变量 + 文件合并, 钳制, SanitizedSummary; 测试覆盖钳制边界与优先级
 
 ## 批 2: 能力层 A (ecs, rules, upstream, cache)
 
