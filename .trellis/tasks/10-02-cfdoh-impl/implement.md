@@ -11,10 +11,10 @@
 
 ## 批 2: 能力层 A (ecs, rules, upstream, cache)
 
-- [ ] internal/ecs: Make/ShouldUse/Add/Remove; OPT 合成语义测试
-- [ ] internal/rules: 三形态解析, Load (远程防御链), ShouldBlock/EcsOverride/Apply, ValidateDynamicURL; 表驱动测试
-- [ ] internal/upstream: 对冲 Query (TTL 250-15000, hedge 0-5000), ResolveAddresses, singleflight 合并; httptest 假上游测试 (延迟/失败/非法应答)
-- [ ] internal/cache: IdentityOf (身份+变体), 分片 LRU, Put 内 TTL 钳制 (负缓存 SOA 语义), 快照读写; 状态判定 (fresh/refresh/stale) 测试
+- [x] internal/ecs: Make/ShouldUse/Add/Remove; OPT 合成语义测试
+- [x] internal/rules: 三形态解析, Load (远程防御链), ShouldBlock/EcsOverride/Apply, ValidateDynamicURL; 表驱动测试
+- [x] internal/upstream: 对冲 Query (TTL 250-15000, hedge 0-5000), ResolveAddresses, singleflight 合并; httptest 假上游测试 (延迟/失败/非法应答)
+- [x] internal/cache: IdentityOf (身份+变体), 分片 LRU, Put 内 TTL 钳制 (负缓存 SOA 语义), 快照读写; 状态判定 (fresh/refresh/stale) 测试
 
 ## 批 3: 能力层 B (pool, cfrange, isp, h3, ech, hubfeed)
 
