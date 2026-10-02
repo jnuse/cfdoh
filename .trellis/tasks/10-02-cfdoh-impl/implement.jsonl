@@ -1,22 +1,4 @@
-{"file": ".trellis/spec/prd/requirements.md", "reason": "全部 30 项功能的行为规则与验收, 实现的行为真源"}
-{"file": ".trellis/spec/cdd/terms.md", "reason": "术语与代码命名对照, 命名必须查表"}
-{"file": ".trellis/spec/arch/modules.md", "reason": "模块划分, 路径与依赖图"}
-{"file": ".trellis/spec/arch/wire.md", "reason": "wire 模块接口签名与防御性检查清单"}
-{"file": ".trellis/spec/arch/config.md", "reason": "config 模块接口"}
-{"file": ".trellis/spec/arch/ecs.md", "reason": "ecs 模块接口"}
-{"file": ".trellis/spec/arch/rules.md", "reason": "rules 模块接口与防御链"}
-{"file": ".trellis/spec/arch/upstream.md", "reason": "upstream 对冲算法接口"}
-{"file": ".trellis/spec/arch/cache.md", "reason": "cache 键构成与 TTL 语义"}
-{"file": ".trellis/spec/arch/pool.md", "reason": "pool 五层与投票规则"}
-{"file": ".trellis/spec/arch/cfrange.md", "reason": "cfrange 接口"}
-{"file": ".trellis/spec/arch/isp.md", "reason": "isp 表语义"}
-{"file": ".trellis/spec/arch/h3.md", "reason": "h3 全票制与代数"}
-{"file": ".trellis/spec/arch/ech.md", "reason": "ech 三态与来源优先级"}
-{"file": ".trellis/spec/arch/hubfeed.md", "reason": "公开池拉取规则"}
-{"file": ".trellis/spec/arch/rewrite.md", "reason": "改写链接口与兜底语义"}
-{"file": ".trellis/spec/arch/resolver.md", "reason": "管线编排次序与缓存策略"}
-{"file": ".trellis/spec/arch/httpapi.md", "reason": "端点路由与鉴权矩阵"}
-{"file": ".trellis/spec/arch/server-entry.md", "reason": "退出次序"}
-{"file": ".trellis/spec/arch/cfhost.md", "reason": "客户端行为规则"}
-{"file": ".trellis/spec/arch/client-entry.md", "reason": "客户端子命令"}
-{"file": ".trellis/spec/arch/build-release.md", "reason": "产物清单与命名"}
+{"file": ".trellis/spec/arch/wire.md", "reason": "wire 模块契约: 接口签名与防御性检查清单"}
+{"file": ".trellis/spec/arch/config.md", "reason": "config 模块契约"}
+{"file": ".trellis/spec/prd/requirements.md", "reason": "只看 F-002 (wire 行为) 与 F-022 (config 字段默认值钳制) 两节"}
+{"file": ".trellis/spec/cdd/terms.md", "reason": "只看 组件 组; 命名查表"}
