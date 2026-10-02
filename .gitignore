@@ -1,0 +1,10 @@
+# 第三方参考项目: 公开仓库可重新克隆, 不入本仓库历史 (其自带 .git 会形成嵌套仓库)
+/refer/
+
+# 本地开发者身份 (Trellis, gitignored by design)
+.trellis/.developer
+
+# Go 构建产物
+*.test
+*.out
+/dist/
