@@ -1,4 +1,3 @@
-{"file": ".trellis/spec/arch/httpapi.md", "reason": "httpapi 模块契约: 路由, DoH 校验, 鉴权, 客户端识别, 监听与退出, 真源"}
-{"file": ".trellis/spec/arch/server-entry.md", "reason": "服务端入口契约: 信号次序, 快照编排, 后台任务调度"}
-{"file": ".trellis/spec/arch/resolver.md", "reason": "resolver 契约含 SaveCacheSnapshot/LoadCacheSnapshot 扩展"}
-{"file": ".trellis/spec/prd/requirements.md", "reason": "验收对照 F-001/F-005/F-008/F-017/F-018/F-019/F-020/F-021"}
+{"file": ".trellis/spec/arch/cfhost.md", "reason": "cfhost 模块契约: 主循环, 接口签名, hosts 区块与事件, 真源"}
+{"file": ".trellis/spec/arch/client-entry.md", "reason": "客户端入口契约: 子命令分发薄壳"}
+{"file": ".trellis/spec/prd/requirements.md", "reason": "只看 F-023 至 F-027 五节 (候选拉取/测速选优/hosts 管理/服务化/配置)"}

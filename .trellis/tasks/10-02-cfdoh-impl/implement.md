@@ -36,9 +36,9 @@
 
 ## 批 5: 客户端 (internal/cfhost, cmd/cfhost)
 
-- [ ] internal/cfhost: 配置, 候选拉取 (公开池 API/优选域名/静态), 本地测速 (TLS 握手计时, 多轮中位), 滞回, hosts 区块管理 (原子写/无变化不写/区块外保真/flushdns), 单实例锁, RunOnce/RunLoop
-- [ ] cmd/cfhost: 子命令分发 (install/uninstall/start/stop/run-once/status), --version
-- [ ] 测试: hosts 区块保真, 滞回判定表驱动, 候选过滤; Windows 服务接口抽象
+- [x] internal/cfhost: 配置, 候选拉取 (公开池 API/优选域名/静态), 本地测速 (TLS 握手计时, 多轮中位), 滞回, hosts 区块管理 (原子写/无变化不写/区块外保真/flushdns), 单实例锁, RunOnce/RunLoop
+- [x] cmd/cfhost: 子命令分发 (install/uninstall/start/stop/run-once/status), --version
+- [x] 测试: hosts 区块保真, 滞回判定表驱动, 候选过滤; Windows 服务接口抽象
 
 ## 批 6: 交付 (构建与发布)
 
