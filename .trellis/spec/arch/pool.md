@@ -7,7 +7,9 @@
 - 运营商池与专属池按 scope 键整份覆盖; 全国池是保留 scope.
 - 按主机池 (站点池, GitHub 池) 按来源整份覆盖, 读时跨来源多数决; 站点池标签为合并内容的哈希.
 - 容量: 自学习 8 来源, 专属 32, 运营商 16, 按主机池各 8 来源; 超限按最早插入淘汰.
+- CF_DROP_AAAA 开启时 v6 各学习池层视为空, 不参与补足.
 - 上报地址逐个强校验; 优选域名解析容忍单域名失败, 全部失败才报错.
+- 探针态快照: 五张表 (含各条目过期时刻与来源) 序列化落盘; scope client 键为前缀串, 快照不含完整客户端 IP.
 
 对外接口:
 
@@ -32,6 +34,8 @@ func ScopedStatus() []ScopedReport
 func IspPoolStatus() []IspPoolReport
 func GithubStatus() *HostPoolStatus
 func SiteStatus() *HostPoolStatus
+func SaveState(path string) error
+func LoadState(path string) error
 ```
 
 数据所有权: 自学习, 专属, 运营商三张学习池表; 站点与 GitHub 两张按主机池表.
@@ -41,6 +45,8 @@ func SiteStatus() *HostPoolStatus
 - 容量常量集中一处定义.
 - 投票与限段规则 (严格多数, 每 /24 两个) 是防污染核心, 不可简化.
 - Meta ECH 状态不入本模块 (住 ech).
+- 快照文件由服务端入口编排读写; 文件不存在视为无状态, 内容损坏记日志后保持空态, 不阻塞启动.
+- 快照格式变更须带版本号并能读既有版本的文件.
 
 事件目录:
 - preferred_pool_updated — 学习池写入; detail: source, scope, 地址数, ttl.

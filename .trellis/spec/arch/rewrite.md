@@ -3,6 +3,7 @@
 业务逻辑:
 - 判定: 应答地址落在 Cloudflare 网段即判定; 多 CDN 域名 (X 族) 叠加 "<域名>.cdn.cloudflare.net" 可解析性判定.
 - 改写: A/AAAA 与 HTTPS 记录地址提示替换为优选池 (每族至多 6); X 域名仅改写判定由 Cloudflare 服务的应答且不返回 AAAA.
+- CF_DROP_AAAA 开启时, 经改写 (含 X 改写) 的应答去除 AAAA 记录; 非改写应答不受影响.
 - 钉住: 站点池与 GitHub 池的主机强制为池地址并去 IPv6, 不经优选池选择.
 - 注入: ECH 配置写入 HTTPS 记录 ech 参数, ALPN 按 h3 门控; 上游无 HTTPS 记录时补造一条.
 - 展平: CNAME 链上的记录移到查询名下, 判定用上游原始地址 (优选地址不必落网段).

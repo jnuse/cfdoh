@@ -2,7 +2,7 @@
 
 ## Goal
 
-按已冻结的三层 spec (prd 30 项功能 / cdd 46 条术语 / arch 20 模块) 实现 Go 项目 cfdoh: 服务端 (DoH 解析与应答改写) 与客户端 (本机测速与 hosts 维护), 含测试与发布流水线. refer/edge-smart-doh 为行为对照基线, 不作为代码依赖.
+按已冻结的三层 spec (prd 30 项功能 / cdd 52 条术语 / arch 19 模块) 实现 Go 项目 cfdoh: 服务端 (DoH 解析与应答改写) 与客户端 (本机测速与 hosts 维护), 含测试与发布流水线. refer/edge-smart-doh 为行为对照基线, 不作为代码依赖.
 
 ## Requirements
 
