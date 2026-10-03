@@ -1,4 +1,2 @@
-{"file": ".trellis/spec/arch/wire.md", "reason": "wire 模块契约: 接口签名与防御性检查清单"}
-{"file": ".trellis/spec/arch/config.md", "reason": "config 模块契约"}
-{"file": ".trellis/spec/prd/requirements.md", "reason": "只看 F-002 (wire 行为) 与 F-022 (config 字段默认值钳制) 两节"}
-{"file": ".trellis/spec/cdd/terms.md", "reason": "只看 组件 组; 命名查表"}
+{"file": ".trellis/spec/arch/resolver.md", "reason": "resolver 模块契约: 签名, 缓存策略编排, 改写链次序, 真源"}
+{"file": ".trellis/spec/prd/requirements.md", "reason": "只看 F-004 (缓存策略) 与 F-013 (ECS 衔接) 两节"}
