@@ -12,7 +12,7 @@
 
 - 命令行: `docker compose -f deploy/compose.yml up -d`
 - 产物: release 资产 (`cfdoh_<ver>_<os>_<arch>.tar.gz`, `cfhost_<ver>_<os>_<arch>.zip|tar.gz`, `SHA256SUMS`), 镜像 `ghcr.io/<owner>/cfdoh`
-- 文件: `Dockerfile`, `deploy/compose.yml`, `deploy/env.example`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`
+- 文件: `Dockerfile`, `deploy/compose.yml`, `deploy/env.example`, `deploy/cfdoh.service` (服务端 systemd 单元, F-021), `deploy/cfhost.service` (客户端 Linux systemd 单元, F-026), `deploy/nginx.sample.conf` (反代配置样例, F-021), `.github/workflows/ci.yml`, `.github/workflows/release.yml`
 
 数据所有权: 产物命名规则与目标平台矩阵.
 

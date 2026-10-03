@@ -43,7 +43,7 @@
 ## 批 6: 交付 (构建与发布)
 
 - [x] 版本注入 (--version), ldflags 构建参数
-- [x] Dockerfile (多阶段, 非 root, CA 证书), deploy/compose.yml + env.example
+- [x] Dockerfile (多阶段, 非 root, CA 证书), deploy/compose.yml + env.example; systemd 单元 ×2 与反代样例 (F-021/F-026: cfdoh.service, cfhost.service, nginx.sample.conf)
 - [x] .github/workflows/ci.yml (测试+构建检查), release.yml (tag 触发, 双组件四平台产物 + SHA256SUMS + GHCR)
 - [x] 本地 docker build 验证 (本地无 docker, 以 YAML 语法校验 + Dockerfile 结构自查替代; ci.yml 含 docker build job 兜底); workflow YAML 语法校验
 - [x] README 快速开始 (compose 部署 + cfhost 安装)
