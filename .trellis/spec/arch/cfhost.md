@@ -2,6 +2,8 @@
 
 业务逻辑:
 - 主循环一轮: 拉取候选 (多源合并去重, 仅公网单播; 源含公开池 API, 优选域名, 静态列表) → 本地测速 (对 443 端口 TCP+TLS 握手计时, SNI 用管辖域名之一, 多轮取中位, 失败淘汰, 可选 HTTP 端到端验证) → 滞回判定 → hosts 区块更新.
+- 候选源四形态语法: `pool:<url>[#<isp>]` (公开池 API, 只取 published 且 isp 匹配, 缺省 national), `domain:<域名>` (系统 DNS 解析 A), `list:<ip,...>` (静态), 其余 `https://...` (通用远程 API, 每行一个 IP 的文本或 JSON 字符串数组).
+- 状态文件默认路径 os.UserConfigDir()/cfdoh/cfhost-state.json, 领域含在用 v4/v6, 上轮摘要, 下次刷新时刻, 连续失败计数与上轮候选; 单实例锁文件 cfhost.lock (含 PID, 活实例拒绝, 死实例覆盖) 同目录, 仅常驻模式持有.
 - 测速全部失败时保留 hosts 现状不动.
 - hosts 区块带标记 (# BEGIN cfhost 至 # END cfhost), 区块外逐字节保留; 原子更新; 最优地址未变化不重写; 更新后刷新系统 DNS 缓存.
 - 单实例锁, 重复启动退出.
