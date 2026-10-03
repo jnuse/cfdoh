@@ -1,0 +1,28 @@
+# cfdoh systemd unit (reverse-proxy mode: TLS terminated by nginx/caddy).
+# Install: cp cfdoh.service /etc/systemd/system/ && systemctl enable --now cfdoh
+[Unit]
+Description=cfdoh DoH server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cfdoh
+Group=cfdoh
+StateDirectory=cfdoh
+Environment=HOST=127.0.0.1
+Environment=PORT=8787
+Environment=CACHE_PERSIST_PATH=/var/lib/cfdoh/cache.json
+EnvironmentFile=-/etc/cfdoh/cfdoh.env
+ExecStart=/usr/local/bin/cfdoh
+Restart=on-failure
+RestartSec=5
+# hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/cfdoh
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

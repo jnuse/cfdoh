@@ -1,0 +1,15 @@
+# cfhost systemd unit (Linux client; Windows uses the native service).
+[Unit]
+Description=cfdoh cfhost daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/cfhost
+Environment=CFHOST_CONFIG=/etc/cfdoh/cfhost.json
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
