@@ -65,10 +65,14 @@ func sharedCache(cfg *config.Config) *cache.Cache {
 	if c != nil {
 		return c
 	}
+	capacity := 0
+	if cfg != nil {
+		capacity = cfg.CacheMaxEntries
+	}
 	sharedMu.Lock()
 	defer sharedMu.Unlock()
 	if shared == nil {
-		shared = cache.New(cfg.CacheMaxEntries)
+		shared = cache.New(capacity)
 	}
 	return shared
 }
@@ -167,8 +171,22 @@ func resolveFresh(ctx context.Context, query []byte, opts *Options, cfg *config.
 			note(notes, "cache: answer not stored (SERVFAIL or zero TTL)")
 		}
 	}
-	applyRewriteChain(ctx, plan, resp, cfg, notes)
+	applyRewriteChain(ctx, plan, resp, rewriteCfg(cfg, plan.pool), notes)
 	return &Result{Packet: finalizeAnswer(query, resp), Upstream: res.Upstream}, nil
+}
+
+// rewriteCfg lifts the CF rewrite gate for this query when a usable pool
+// exists: the reference treats any resolved pool (explicit parameters,
+// learned pools, domain or static pools) as enabling the rewrite, with
+// CF_REWRITE_ENABLED as a global on-switch on top (F-009: 改写启用条件为存在
+// 任一可用池).
+func rewriteCfg(cfg *config.Config, p *pool.Pool) *config.Config {
+	if cfg.CFRewriteEnabled || p == nil || (len(p.IPv4) == 0 && len(p.IPv6) == 0) {
+		return cfg
+	}
+	lifted := *cfg
+	lifted.CFRewriteEnabled = true
+	return &lifted
 }
 
 // refreshInBackground reruns the storing pipeline detached from the caller
@@ -554,6 +572,45 @@ func hostOf(upstreamURL string) string {
 		return u.Host
 	}
 	return upstreamURL
+}
+
+// SaveCacheSnapshot writes the shared answer cache to path atomically. The
+// entry point calls it periodically and on shutdown.
+func SaveCacheSnapshot(path string) error {
+	return sharedCache(nil).SaveSnapshot(path)
+}
+
+// LoadCacheSnapshot restores the shared answer cache from path. It builds
+// the cache with cfg's capacity first, so boot restores work even before any
+// query ran.
+func LoadCacheSnapshot(path string, cfg *config.Config) error {
+	return sharedCache(cfg).LoadSnapshot(path)
+}
+
+// CacheState reports the read-only cache state a query would serve from
+// right now — "fresh", "refresh" or "stale" per the serve policy, or
+// "none". /explain uses it to describe what a client would receive without
+// touching the cache.
+func CacheState(ctx context.Context, query []byte, opts *Options, cfg *config.Config) string {
+	if opts == nil {
+		opts = &Options{}
+	}
+	plan, err := prepareFull(ctx, query, opts, cfg)
+	if err != nil {
+		return "none"
+	}
+	qtype := plan.base.query.Questions[0].Type
+	hit := sharedCache(cfg).Get(plan.id, cfg)
+	if hit == nil {
+		return "none"
+	}
+	if qtype == wire.TypeHTTPS && (hit.State == cache.StateRefresh || hit.State == cache.StateStale) {
+		return string(hit.State) // HTTPS serves from any cached state
+	}
+	if hit.State == cache.StateStale {
+		return "none" // plain types never serve stale up front
+	}
+	return string(hit.State)
 }
 
 // note appends one "step: conclusion" line to the explain notes.

@@ -25,7 +25,7 @@ func TestRoundTripRecords(t *testing.T) {
 	var ip6 [16]byte
 	copy(ip6[:], []byte{0x26, 0x06, 0x47, 0x00})
 	pkt := &Packet{
-		Header: Header{ID: 1, Flags: 0x8180},
+		Header:    Header{ID: 1, Flags: 0x8180},
 		Questions: []Question{{Name: "Example.COM.", Type: TypeHTTPS, Class: ClassIN}},
 		Answers: []Record{
 			{Name: "example.com.", Type: TypeCNAME, Class: ClassIN, TTL: 300, RData: Name{Name: "target.example.com."}},

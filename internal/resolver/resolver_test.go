@@ -33,20 +33,20 @@ func resetCache() {
 
 func baseCfg(upstreams ...string) *config.Config {
 	return &config.Config{
-		Upstreams:         upstreams,
-		EcsUpstreams:      upstreams,
-		UpstreamTimeoutMs: 1000,
-		UpstreamHedgeMs:   0,
-		MaxDNSPacketSize:  65535,
-		CacheMinTTL:       30,
-		CacheMaxTTL:       3600,
-		NegativeCacheMaxTTL: 300,
-		CacheStaleTTL:     86400,
+		Upstreams:            upstreams,
+		EcsUpstreams:         upstreams,
+		UpstreamTimeoutMs:    1000,
+		UpstreamHedgeMs:      0,
+		MaxDNSPacketSize:     65535,
+		CacheMinTTL:          30,
+		CacheMaxTTL:          3600,
+		NegativeCacheMaxTTL:  300,
+		CacheStaleTTL:        86400,
 		CachePrefetchPercent: 10,
-		CacheMaxEntries:   4096,
-		EcsMode:           "off",
-		EcsIPv4Prefix:     24,
-		EcsIPv6Prefix:     48,
+		CacheMaxEntries:      4096,
+		EcsMode:              "off",
+		EcsIPv4Prefix:        24,
+		EcsIPv6Prefix:        48,
 	}
 }
 

@@ -17,6 +17,9 @@ type Result struct { Packet []byte; Upstream string }
 func Resolve(ctx context.Context, query []byte, opts *Options, cfg *config.Config) ([]byte, error)
 func ResolveFresh(ctx context.Context, query []byte, opts *Options, cfg *config.Config, notes *[]string) (*Result, error)
 func ChromiumECHVerdict(a, aaaa, https *wire.Packet) (usable bool, reason string)
+func SaveCacheSnapshot(path string) error
+func LoadCacheSnapshot(path string, cfg *config.Config) error
+func CacheState(ctx context.Context, query []byte, opts *Options, cfg *config.Config) string
 ```
 
 数据所有权: — (状态住各能力模块).

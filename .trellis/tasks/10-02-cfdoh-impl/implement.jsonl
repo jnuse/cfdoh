@@ -1,2 +1,4 @@
-{"file": ".trellis/spec/arch/resolver.md", "reason": "resolver 模块契约: 签名, 缓存策略编排, 改写链次序, 真源"}
-{"file": ".trellis/spec/prd/requirements.md", "reason": "只看 F-004 (缓存策略) 与 F-013 (ECS 衔接) 两节"}
+{"file": ".trellis/spec/arch/httpapi.md", "reason": "httpapi 模块契约: 路由, DoH 校验, 鉴权, 客户端识别, 监听与退出, 真源"}
+{"file": ".trellis/spec/arch/server-entry.md", "reason": "服务端入口契约: 信号次序, 快照编排, 后台任务调度"}
+{"file": ".trellis/spec/arch/resolver.md", "reason": "resolver 契约含 SaveCacheSnapshot/LoadCacheSnapshot 扩展"}
+{"file": ".trellis/spec/prd/requirements.md", "reason": "验收对照 F-001/F-005/F-008/F-017/F-018/F-019/F-020/F-021"}

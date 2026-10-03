@@ -238,7 +238,7 @@ func TestOnCloudflare(t *testing.T) {
 	})
 	t.Run("x domain probe failure propagates error", func(t *testing.T) {
 		cfg := &config.Config{XDomains: []string{"x.com"},
-			Upstreams: []string{"http://127.0.0.1:1/dns-query"},
+			Upstreams:         []string{"http://127.0.0.1:1/dns-query"},
 			UpstreamTimeoutMs: 2500, MaxDNSPacketSize: 65535}
 		ok, err := OnCloudflare(context.Background(), "x.com", ranges, cfg, nil, nil)
 		if ok || err == nil {
@@ -270,14 +270,14 @@ func TestOnCloudflare(t *testing.T) {
 func TestRewriteAddresses(t *testing.T) {
 	ranges := testRanges()
 	poolBoth := &pool.Pool{
-		IPv4: []string{"104.17.1.1", "104.17.1.2", "104.17.1.3"},
-		IPv6: []string{"2606:4700:1111::1", "2606:4700:1111::2"},
+		IPv4:  []string{"104.17.1.1", "104.17.1.2", "104.17.1.3"},
+		IPv6:  []string{"2606:4700:1111::1", "2606:4700:1111::2"},
 		Scope: "isp:chinanet",
 	}
 
 	cfAnswer := func() *wire.Packet {
 		return &wire.Packet{
-			Header: wire.Header{ID: 7, Flags: 0x8180},
+			Header:    wire.Header{ID: 7, Flags: 0x8180},
 			Questions: []wire.Question{{Name: "www.example.com", Type: wire.TypeA, Class: wire.ClassIN}},
 			Answers: []wire.Record{
 				aRec("www.example.com", "104.16.1.1", 60),

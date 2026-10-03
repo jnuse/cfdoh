@@ -34,6 +34,7 @@ type Config struct {
 	CFDropAAAA           bool
 	AdminToken           string
 	HubToken             string
+	DohOriginToken       string
 	IspTableURL          string
 	CFIPv4URL            string
 	CFIPv6URL            string
@@ -179,6 +180,7 @@ func Load() (*Config, error) {
 	cfg.CFDropAAAA = src.boolValue("CF_DROP_AAAA", false)
 	cfg.AdminToken = src.str("ADMIN_TOKEN", "")
 	cfg.HubToken = src.str("HUB_TOKEN", "")
+	cfg.DohOriginToken = src.str("DOH_ORIGIN_TOKEN", "")
 	cfg.IspTableURL = src.str("ISP_TABLE_URL", "")
 	cfg.CFIPv4URL = src.str("CF_IPV4_URL", "https://www.cloudflare.com/ips-v4")
 	cfg.CFIPv6URL = src.str("CF_IPV6_URL", "https://www.cloudflare.com/ips-v6")
@@ -235,7 +237,7 @@ func (c *Config) SanitizedSummary() string {
 		c.CacheMinTTL, c.CacheMaxTTL, c.NegativeCacheMaxTTL, c.CacheStaleTTL, c.CachePrefetchPercent, c.CacheMaxEntries)
 	fmt.Fprintf(&sb, "ecs mode=%s domains=%s v4/%d v6/%d\n", c.EcsMode, strings.Join(c.EcsDomains, ","), c.EcsIPv4Prefix, c.EcsIPv6Prefix)
 	fmt.Fprintf(&sb, "rewrite=%v preferred_domain=%s drop_aaaa=%v\n", c.CFRewriteEnabled, strings.Join(c.CFPreferredDomain, ","), c.CFDropAAAA)
-	fmt.Fprintf(&sb, "admin_token=%s hub_token=%s\n", configuredWord(c.AdminToken), configuredWord(c.HubToken))
+	fmt.Fprintf(&sb, "admin_token=%s hub_token=%s doh_origin_token=%s\n", configuredWord(c.AdminToken), configuredWord(c.HubToken), configuredWord(c.DohOriginToken))
 	fmt.Fprintf(&sb, "isp_table=%s\n", configuredWord(c.IspTableURL))
 	fmt.Fprintf(&sb, "ech enabled=%v source=%s meta=%s\n", c.EchEnabled, c.EchSourceDomain, configuredWord(c.MetaEchConfigBase64))
 	fmt.Fprintf(&sb, "pool_feed url=%s interval=%ds ttl=%ds\n", configuredWord(c.PoolFeedURL), c.PoolFeedIntervalSec, c.PoolFeedTTLSec)

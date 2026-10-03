@@ -35,11 +35,11 @@ const (
 
 // Defensive limits.
 const (
-	maxQuestions   = 32
+	maxQuestions    = 32
 	maxTotalRecords = 512
-	maxNameJumps   = 32
-	maxLabelLength = 63
-	maxWireName    = 255
+	maxNameJumps    = 32
+	maxLabelLength  = 63
+	maxWireName     = 255
 )
 
 // Header is the 12-byte DNS message header.

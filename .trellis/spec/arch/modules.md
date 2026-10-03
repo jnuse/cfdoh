@@ -18,8 +18,8 @@ cfdoh 的模块划分: 模块, 代码落点, 依赖. 各模块的定义见其模
 | ech | internal/ech/ | config, upstream, wire |
 | rewrite | internal/rewrite/ | config, wire, cfrange, upstream, pool, ech, h3 |
 | resolver | internal/resolver/ | config, ecs, rules, cache, upstream, pool, rewrite, isp |
-| httpapi | internal/httpapi/ | config, resolver, pool, h3, ech, cfrange |
-| 服务端入口 | cmd/cfdoh/ | httpapi, config |
+| httpapi | internal/httpapi/ | config, wire, ecs, rules, isp, cfrange, resolver, pool, h3, ech |
+| 服务端入口 | cmd/cfdoh/ | config, cfrange, resolver, pool, h3, ech, hubfeed, httpapi |
 | cfhost | internal/cfhost/ | — |
 | 客户端入口 | cmd/cfhost/ | cfhost |
 | 构建与发布 | Dockerfile, deploy/, .github/workflows/ | — |

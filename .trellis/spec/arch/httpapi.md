@@ -8,7 +8,7 @@
 - admin 鉴权: 双令牌 (管理令牌全权, 推送令牌仅运营商池), Bearer 常数时间比较; 未配置管理令牌时全部 admin 返回 404.
 - admin 上报强校验: 地址逐个解析, 主机名语法白名单, source 与 ttl 钳制; 运营商池逐地址校验在 Cloudflare 网段内, 任一在外整批拒绝.
 - 自检报告存储与展示; explain 输出汇总各能力模块状态.
-- 客户端识别头取值顺序 X-Real-IP → CF-Connecting-IP → X-Forwarded-For 首值; 自定义信任头经 DOH_ORIGIN_TOKEN 门控; 反代模式下缺失时以 TCP 对端地址补齐.
+- 客户端识别头取值顺序 X-Real-IP → CF-Connecting-IP → X-Forwarded-For 首值; 自定义信任头 X-DoH-Client-IP 经 DOH_ORIGIN_TOKEN 门控 (请求携带常数时间匹配的 X-DoH-Origin-Token 时优先取该头首值); 反代模式下缺失时以 TCP 对端地址补齐.
 
 对外接口:
 
