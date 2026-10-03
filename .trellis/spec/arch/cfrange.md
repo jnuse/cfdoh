@@ -9,10 +9,11 @@
 ```go
 type Ranges struct { V4, V6 []netip.Prefix }
 func Load(ctx context.Context, cfg *config.Config) (*Ranges, error)
+func Current() *Ranges
 func (r *Ranges) Contains(ip string) bool
 ```
 
-数据所有权: 当前网段表与拉取时刻.
+数据所有权: 当前网段表与拉取时刻 (Load 成功后原子换入, Current 供 hubfeed 与 rewrite 消费).
 
 扩展规则:
 - 来源 URL 可配置; 多来源合并须去重.

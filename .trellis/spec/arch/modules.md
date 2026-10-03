@@ -14,7 +14,7 @@ cfdoh 的模块划分: 模块, 代码落点, 依赖. 各模块的定义见其模
 | cfrange | internal/cfrange/ | config |
 | isp | internal/isp/ | config |
 | h3 | internal/h3/ | wire |
-| hubfeed | internal/hubfeed/ | config, cfrange, pool |
+| hubfeed | internal/hubfeed/ | config, cfrange, pool, wire |
 | ech | internal/ech/ | config, upstream, wire |
 | rewrite | internal/rewrite/ | config, wire, cfrange, upstream, pool, ech, h3 |
 | resolver | internal/resolver/ | config, ecs, rules, cache, upstream, pool, rewrite, isp |

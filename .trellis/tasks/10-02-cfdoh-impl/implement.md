@@ -18,12 +18,12 @@
 
 ## 批 3: 能力层 B (pool, cfrange, isp, h3, ech, hubfeed)
 
-- [ ] internal/pool: 三张学习池表 + SetLearned/Preferred (池层优先序, 每族补足), CombineRankings (严格多数/限段/交错), HostPools (站点/GitHub), SitePoolTag, 状态查询; 投票合并全分支测试
-- [ ] internal/cfrange: 官方列表拉取解析, Contains; 用本地 httptest 假列表测试
-- [ ] internal/isp: 表解析 (嵌套最长前缀, 单调栈 parent), ScopeOf 刷新退避; 表驱动测试
-- [ ] internal/h3: SetVerdicts/Verdict (后缀最长匹配)/AlpnFor/CacheTag 代数; 全票制测试
-- [ ] internal/ech: ConfigFor (发布域名解析缓存), Validated, Meta 三态 + MetaCacheTag; 状态机测试
-- [ ] internal/hubfeed: 公开池 API 拉取解析 (cfhub JSON), 整池 CF 校验拒绝, RefreshOnce/Start; httptest 假 API 测试 (含污染池)
+- [x] internal/pool: 三张学习池表 + SetLearned/Preferred (池层优先序, 每族补足), CombineRankings (严格多数/限段/交错), HostPools (站点/GitHub), SitePoolTag, 状态查询; 投票合并全分支测试
+- [x] internal/cfrange: 官方列表拉取解析, Contains; 用本地 httptest 假列表测试
+- [x] internal/isp: 表解析 (嵌套最长前缀, 单调栈 parent), ScopeOf 刷新退避; 表驱动测试
+- [x] internal/h3: SetVerdicts/VerdictFor (后缀最长匹配)/AlpnFor/CacheTag 代数; 全票制测试
+- [x] internal/ech: ConfigFor (发布域名解析缓存), Validated, Meta 三态 + MetaCacheTag; 状态机测试
+- [x] internal/hubfeed: 公开池 API 拉取解析 (cfhub JSON), 整池 CF 校验拒绝, RefreshOnce/Start; httptest 假 API 测试 (含污染池)
 
 ## 批 4: 服务端汇合 (rewrite, resolver, httpapi, cmd/cfdoh)
 

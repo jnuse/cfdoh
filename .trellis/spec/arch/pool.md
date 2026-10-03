@@ -13,6 +13,12 @@
 
 ```go
 type Pool struct { IPv4, IPv6 []string; Scope string }
+type SourceStatus struct { Source string; IPv4, IPv6 []string; ExpiresAt int64 }
+type LearnedReport struct { IPv4, IPv6 []string; ExpiresAt int64; Sources []SourceStatus }
+type ScopedReport struct { Scope string; IPv4, IPv6 []string; ExpiresAt int64; Active bool }
+type IspPoolReport struct { Scope string; IPv4, IPv6 []string; ExpiresAt int64; Active bool }
+type HostPoolStatus struct { Sources []HostSourceStatus; Hosts map[string][]string }
+type HostSourceStatus struct { Source string; Hosts int; ExpiresAt int64 }
 func Preferred(ctx context.Context, explicitV4, explicitV6, domains []string, usingDefault bool, cfg *config.Config, clientScope, ispScope string) (*Pool, error)
 func SetLearned(ipv4, ipv6 []string, ttl int, source, scope string) error
 func CombineRankings(lists [][]string, size int) []string
@@ -21,9 +27,9 @@ func SetSites(source string, hosts map[string][]string, ttl int)
 func GithubPoolFor(host string) []string
 func SitePoolFor(host string) []string
 func SitePoolTag(host string) string
-func LearnedStatus() *LearnedStatus
-func ScopedStatus() []ScopedStatus
-func IspPoolStatus() []IspPoolStatus
+func LearnedStatus() *LearnedReport
+func ScopedStatus() []ScopedReport
+func IspPoolStatus() []IspPoolReport
 func GithubStatus() *HostPoolStatus
 func SiteStatus() *HostPoolStatus
 ```

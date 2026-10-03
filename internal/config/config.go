@@ -14,57 +14,57 @@ import (
 
 // Config mirrors the environment surface one field per variable.
 type Config struct {
-	Upstreams             []string
-	EcsUpstreams          []string
-	UpstreamTimeoutMs     int
-	UpstreamHedgeMs       int
-	CacheMinTTL           int
-	CacheMaxTTL           int
-	NegativeCacheMaxTTL   int
-	CacheStaleTTL         int
-	CachePrefetchPercent  int
-	EcsMode               string
-	EcsDomains            []string
-	EcsIPv4Prefix         int
-	EcsIPv6Prefix         int
-	CFRewriteEnabled      bool
-	CFPreferredDomain     []string
-	CFPreferredIPv4       []string
-	CFPreferredIPv6       []string
-	CFDropAAAA            bool
-	AdminToken            string
-	HubToken              string
-	IspTableURL           string
-	CFIPv4URL             string
-	CFIPv6URL             string
-	RulesJSON             string
-	RulesURL              string
-	EchEnabled            bool
-	EchConfigBase64       string
-	EchDomains            []string
-	EchSourceDomain       string
-	MetaEchConfigBase64   string
-	MetaDomains           []string
-	XDomains              []string
-	GithubDomains         []string
-	DynamicRuleHosts      []string
-	DynamicRulesMaxBytes  int
-	MaxDNSPacketSize      int
-	PoolFeedURL           string
-	PoolFeedDisabled      bool
-	PoolFeedIntervalSec   int
-	PoolFeedTTLSec        int
-	Host                  string
-	Port                  int
-	PublicHostnames       []string
-	TLSCertFile           string
-	TLSKeyFile            string
-	CacheMaxEntries       int
-	CachePersistPath      string
-	PathAliases           []string
-	Debug                 bool
-	LogQueries            bool
-	PprofAddr             string
+	Upstreams            []string
+	EcsUpstreams         []string
+	UpstreamTimeoutMs    int
+	UpstreamHedgeMs      int
+	CacheMinTTL          int
+	CacheMaxTTL          int
+	NegativeCacheMaxTTL  int
+	CacheStaleTTL        int
+	CachePrefetchPercent int
+	EcsMode              string
+	EcsDomains           []string
+	EcsIPv4Prefix        int
+	EcsIPv6Prefix        int
+	CFRewriteEnabled     bool
+	CFPreferredDomain    []string
+	CFPreferredIPv4      []string
+	CFPreferredIPv6      []string
+	CFDropAAAA           bool
+	AdminToken           string
+	HubToken             string
+	IspTableURL          string
+	CFIPv4URL            string
+	CFIPv6URL            string
+	RulesJSON            string
+	RulesURL             string
+	EchEnabled           bool
+	EchConfigBase64      string
+	EchDomains           []string
+	EchSourceDomain      string
+	MetaEchConfigBase64  string
+	MetaDomains          []string
+	XDomains             []string
+	GithubDomains        []string
+	DynamicRuleHosts     []string
+	DynamicRulesMaxBytes int
+	MaxDNSPacketSize     int
+	PoolFeedURL          string
+	PoolFeedDisabled     bool
+	PoolFeedIntervalSec  int
+	PoolFeedTTLSec       int
+	Host                 string
+	Port                 int
+	PublicHostnames      []string
+	TLSCertFile          string
+	TLSKeyFile           string
+	CacheMaxEntries      int
+	CachePersistPath     string
+	PathAliases          []string
+	Debug                bool
+	LogQueries           bool
+	PprofAddr            string
 }
 
 var defaultUpstreams = "https://cloudflare-dns.com/dns-query,https://dns.google/dns-query,https://dns.quad9.net/dns-query"
@@ -200,6 +200,11 @@ func Load() (*Config, error) {
 		cfg.PoolFeedDisabled = true
 	} else {
 		cfg.PoolFeedURL = src.str("POOL_FEED_URL", "https://cfhub.1molchuan.top/api/v1/pools")
+		if !strings.HasPrefix(cfg.PoolFeedURL, "https://") {
+			slog.Warn("config: POOL_FEED_URL must use https, pool feeding disabled", "value", cfg.PoolFeedURL)
+			cfg.PoolFeedURL = ""
+			cfg.PoolFeedDisabled = true
+		}
 	}
 	cfg.PoolFeedIntervalSec = src.intClamp("POOL_FEED_INTERVAL_SEC", 300, 60, 3600)
 	cfg.PoolFeedTTLSec = src.intClamp("POOL_FEED_TTL_SEC", 1800, 300, 86400)

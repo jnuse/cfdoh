@@ -13,12 +13,14 @@
 func ConfigFor(ctx context.Context, sourceDomain string, cfg *config.Config) ([]byte, error)
 func Validated(base64 string) ([]byte, error)
 type MetaState int
+type StatusReport struct { Mode string; Bytes int; Until int64; Source, Reason string; Active bool }
 func SetMeta(cfgList []byte, ttl int, source, reason string)
 func SetMetaSuspended(ttl int, source, reason string)
 func ClearMeta()
 func MetaOverride() (cfgList []byte, state MetaState)
 func MetaCacheTag() string
-func Status() *Status
+func MetaConfirm(verified []byte, ttl int, source string)
+func Status() *StatusReport
 ```
 
 数据所有权: 发布域名配置缓存与时刻; Meta 状态 (配置字节, 过期, 来源, 原因) 与代数.
