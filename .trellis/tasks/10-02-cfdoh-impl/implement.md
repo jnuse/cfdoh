@@ -30,6 +30,7 @@
 - [ ] internal/rewrite: OnCloudflare/UsesCloudflare/RewriteAddresses/RewriteX/PinAddresses/PinHTTPSHints/InjectECH/InjectConfigured/Flatten; 改写链表驱动测试 (A/AAAA/HTTPS hint 同步, 展平, 兜底)
 - [ ] internal/resolver: Resolve (缓存策略编排: fresh/refresh/stale/HTTPS 即返/SERVFAIL), ResolveFresh (改写链 + notes), ChromiumECHVerdict; 假上游集成测试
 - [ ] internal/httpapi: 路由 (dns-query+别名/explain/admin×6/health/probe), DoH 请求校验 (406/415/413/400/405), admin 双令牌鉴权矩阵 + 上报校验, 直连/反代监听, 优雅退出
+- [ ] pool/h3/ech: SaveState/LoadState 探针态快照 (DTO 序列化, 损坏不阻塞启动; server-entry 编排, 路径由 CACHE_PERSIST_PATH 目录派生)
 - [ ] cmd/cfdoh: 信号处理, 快照恢复, 启动日志
 - [ ] 端到端自测脚本: 起服务 + curl /health, /dns-query (GET/POST), /explain
 
