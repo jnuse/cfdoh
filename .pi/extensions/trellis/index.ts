@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -339,24 +339,50 @@ function contextKey(input?: unknown, ctx?: PiExtensionContext): string | null {
   return null;
 }
 
+function normalizeTaskRef(root: string, ref: string): string {
+  ref = ref.replace(/\\/g, "/").replace(/^\.\//, "");
+  if (ref.startsWith("tasks/")) ref = `.trellis/${ref}`;
+  return ref.startsWith(".trellis/")
+    ? join(root, ref)
+    : isAbsolute(ref)
+      ? ref
+      : join(root, ".trellis", "tasks", ref);
+}
+
 function readTaskDir(root: string, key: string | null): string | null {
   if (!key) return null;
   try {
     const ctx = JSON.parse(
       readText(join(root, ".trellis", ".runtime", "sessions", `${key}.json`)),
     ) as JsonObject;
-    let ref = str(ctx.current_task);
-    if (!ref) return null;
-    ref = ref.replace(/\\/g, "/").replace(/^\.\//, "");
-    if (ref.startsWith("tasks/")) ref = `.trellis/${ref}`;
-    return ref.startsWith(".trellis/")
-      ? join(root, ref)
-      : isAbsolute(ref)
-        ? ref
-        : join(root, ".trellis", "tasks", ref);
+    const ref = str(ctx.current_task);
+    return ref ? normalizeTaskRef(root, ref) : null;
   } catch {
     return null;
   }
+}
+
+// Mirror of Python `_resolve_single_session_fallback` (common/active_task.py):
+// when no session file exists for this context key, fall back to the sole
+// session file's task, but only if exactly one exists. 0 or >=2 files means
+// refuse to guess — the multi-window isolation contract.
+function readTaskDirFallback(root: string): string | null {
+  try {
+    const dir = join(root, ".trellis", ".runtime", "sessions");
+    const files = readdirSync(dir)
+      .filter((f) => f.endsWith(".json"))
+      .sort();
+    if (files.length !== 1) return null;
+    const ctx = JSON.parse(readText(join(dir, files[0]))) as JsonObject;
+    const ref = str(ctx.current_task);
+    return ref ? normalizeTaskRef(root, ref) : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveActiveTaskDir(root: string, key: string | null): string | null {
+  return readTaskDir(root, key) ?? readTaskDirFallback(root);
 }
 
 // ── Workflow State Breadcrumb ─────────────────────────────────────────
@@ -371,7 +397,7 @@ function workflowBreadcrumb(root: string, key: string | null): string {
       b = (m[2] ?? "").trim();
     if (s && b) templates[s] = b;
   }
-  const dir = readTaskDir(root, key);
+  const dir = resolveActiveTaskDir(root, key);
   let header = "Status: no_task",
     lookup = "no_task";
   if (dir) {
@@ -443,7 +469,7 @@ function buildStartupContext(
 }
 
 function buildTaskContext(root: string, key: string | null): string {
-  const dir = readTaskDir(root, key);
+  const dir = resolveActiveTaskDir(root, key);
   if (!dir)
     return "No active Trellis task found. Read .trellis/ before proceeding.";
   const relTaskDir = relative(root, dir).replace(/\\/g, "/");

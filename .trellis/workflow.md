@@ -215,12 +215,15 @@ Durable decision crystallized this turn (user verdict, overturned alternative): 
      therefore must cover every required step from implementation through
      commit, including Phase 3.3 knowledge capture and Phase 3.4 commit. -->
 
-Sub-agent dispatch protocol: dispatch sub-agents with the pi-native `subagent` tool (agent definitions under `.pi/agents/`). Sub-agents run in isolated pi subprocesses and do not inherit the main session's injected context — every dispatch prompt starts with `Active task: <task path from task.py current>` before role-specific instructions, and the sub-agent loads its own context (jsonl entries -> `prd.md` -> `design.md` -> `implement.md`) per its definition file. The extension injects task context into the main session only.
+Sub-agent dispatch protocol: dispatch sub-agents with the pi-native `subagent` tool (agent definitions under `.pi/agents/`). Sub-agents run in isolated pi subprocesses and inherit no main-session context — every dispatch prompt starts with `Active task: <task path from task.py current>`, and each sub-agent loads its own context per its definition file. The extension injects task context into the main session only.
+
+Dispatch details (pre-dispatch gate, agent/mode choice, prompt anatomy, failure handling): load the `subagent-dispatch` skill.
 
 [workflow-state:in_progress]
 Tools: `trellis-implement` / `trellis-research` exist only as pi sub-agents (dispatch via the `subagent` tool by agent name; NOT skills). `trellis-update-spec` is a skill. `trellis-check` exists as both; prefer the sub-agent form when verifying after code changes.
 Flow: `trellis-implement` -> `trellis-check` -> knowledge capture (spec via `trellis-update-spec`, decisions via `agent-notes`) -> commit (Phase 3.4) -> `/trellis:finish-work`.
-Main-session default: dispatch implement/check sub-agents. Sub-agent self-exemption: if already running as `trellis-implement`, do NOT spawn another `trellis-implement` or `trellis-check`; if already running as `trellis-check`, do NOT spawn another `trellis-check` or `trellis-implement`. Dispatch is main session only.
+Main-session default: dispatch implement/check sub-agents; every dispatch prompt starts with `Active task: <task path from task.py current>`. Sub-agent self-exemption: never spawn another implement/check from inside a sub-agent. Dispatch is main session only.
+Dispatch details (pre-dispatch gate, agent/mode choice, prompt anatomy): load the `subagent-dispatch` skill — its net-gain check may rightly keep doc-only work in the main session.
 Dispatch prompt starts with `Active task: <task path from task.py current>`. Read context: jsonl entries -> `prd.md` -> `design.md if present` -> `implement.md if present`.
 Something looks off while reading or debugging code (why is it this way / who decided / safe to change): query `.trellis/notes/` first via `python3 .trellis/scripts/notes.py search <keyword>` — git log answers what changed, notes answer why.
 Durable decision made or overturned mid-execution: offer a one-shot immediate notes capture (`proposed/` until the work ships); the Phase 3.3 sweep then promotes, links, or archives it.
