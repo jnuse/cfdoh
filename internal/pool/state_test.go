@@ -26,6 +26,12 @@ func stateTestFreezeClock(t *testing.T, at int64) {
 	t.Cleanup(func() { now = previous })
 }
 
+// hostStatusEmpty matches the never-nil contract: an empty host-pool
+// report is a non-nil object with no sources and no hosts.
+func hostStatusEmpty(s *HostPoolStatus) bool {
+	return s != nil && len(s.Sources) == 0 && len(s.Hosts) == 0
+}
+
 func TestPoolStateRoundTrip(t *testing.T) {
 	stateTestResetTables()
 	stateTestFreezeClock(t, 1_000_000)
@@ -58,7 +64,7 @@ func TestPoolStateRoundTrip(t *testing.T) {
 
 	stateTestResetTables()
 	if LearnedStatus() != nil || len(ScopedStatus()) != 0 || len(IspPoolStatus()) != 0 ||
-		GithubStatus() != nil || SiteStatus() != nil {
+		!hostStatusEmpty(GithubStatus()) || !hostStatusEmpty(SiteStatus()) {
 		t.Fatal("tables not cleared before LoadState")
 	}
 	if err := LoadState(path); err != nil {
@@ -139,7 +145,7 @@ func TestPoolStateCorruptFile(t *testing.T) {
 	if err := LoadState(path); err != nil {
 		t.Fatalf("corrupt snapshot must not fail: %v", err)
 	}
-	if LearnedStatus() != nil || len(ScopedStatus()) != 0 || GithubStatus() != nil || SiteStatus() != nil {
+	if LearnedStatus() != nil || len(ScopedStatus()) != 0 || !hostStatusEmpty(GithubStatus()) || !hostStatusEmpty(SiteStatus()) {
 		t.Error("state must stay empty after unreadable snapshot")
 	}
 
@@ -149,7 +155,7 @@ func TestPoolStateCorruptFile(t *testing.T) {
 	if err := LoadState(path); err != nil {
 		t.Fatalf("unknown version must not fail: %v", err)
 	}
-	if LearnedStatus() != nil || GithubStatus() != nil {
+	if LearnedStatus() != nil || !hostStatusEmpty(GithubStatus()) {
 		t.Error("state must stay empty after unknown version")
 	}
 }
@@ -159,7 +165,7 @@ func TestPoolStateMissingFile(t *testing.T) {
 	if err := LoadState(filepath.Join(t.TempDir(), "absent.json")); err != nil {
 		t.Fatalf("missing snapshot must be a no-op: %v", err)
 	}
-	if LearnedStatus() != nil || len(ScopedStatus()) != 0 || GithubStatus() != nil {
+	if LearnedStatus() != nil || len(ScopedStatus()) != 0 || !hostStatusEmpty(GithubStatus()) {
 		t.Error("state must stay empty without a snapshot")
 	}
 }

@@ -957,6 +957,33 @@ func TestAdminHealth(t *testing.T) {
 	}
 }
 
+// H1 regression: with no github/site reports at all the health panel must
+// answer 200 with zero source counts (previously a nil-report panic).
+func TestAdminHealthEmptyState(t *testing.T) {
+	pool.ResetHostPoolsForTesting()
+	cfg := baseCfg()
+	cfg.AdminToken = "admin-tok"
+	ts, _ := newTS(t, cfg)
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/health", nil)
+	req.Header.Set("Authorization", "Bearer admin-tok")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := decodeJSON(t, resp)
+	if resp.StatusCode != 200 {
+		t.Fatalf("admin health = %d, want 200", resp.StatusCode)
+	}
+	modules, _ := out["modules"].(map[string]any)
+	pools, _ := modules["pool"].(map[string]any)
+	for _, key := range []string{"github_sources", "site_sources"} {
+		if v, _ := pools[key].(float64); v != 0 {
+			t.Fatalf("%s = %v, want 0 with no reports", key, pools[key])
+		}
+	}
+}
+
 func TestExplain(t *testing.T) {
 	upstream := newFakeUpstream(t, answerByType)
 	cfg := baseCfg(upstream.URL)

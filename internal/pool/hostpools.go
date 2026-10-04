@@ -117,7 +117,9 @@ func (h *hostPools) status() *HostPoolStatus {
 	defer h.mu.Unlock()
 	active := h.active()
 	if len(active) == 0 {
-		return nil
+		// empty state is a legal state, not an error: callers count sources
+		// straight off the report (never return nil)
+		return &HostPoolStatus{Sources: []HostSourceStatus{}, Hosts: map[string][]string{}}
 	}
 	// rebuild order-indexed source list
 	out := &HostPoolStatus{Hosts: make(map[string][]string)}
@@ -193,10 +195,12 @@ func SitePoolTag(host string) string {
 	return fmt.Sprintf("site%x", h.Sum32())
 }
 
-// GithubStatus renders the GitHub pools state.
+// GithubStatus renders the GitHub pools state; the report is never nil
+// (an empty object when nothing is active).
 func GithubStatus() *HostPoolStatus { return github.status() }
 
-// SiteStatus renders the site pools state.
+// SiteStatus renders the site pools state; the report is never nil (an
+// empty object when nothing is active).
 func SiteStatus() *HostPoolStatus { return sites.status() }
 
 func joinComma(values []string) string {

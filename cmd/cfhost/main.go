@@ -17,39 +17,22 @@ var version = "dev"
 
 func main() {
 	args := os.Args[1:]
-	if len(args) > 0 {
-		switch args[0] {
-		case "install":
-			exit(cfhost.Install())
-		case "uninstall":
-			exit(cfhost.Uninstall())
-		case "start":
-			exit(cfhost.Start())
-		case "stop":
-			exit(cfhost.Stop())
-		case "run-once":
-			cfg, err := cfhost.LoadConfig()
-			if err != nil {
-				exit(err)
-			}
-			exit(cfhost.RunOnce(context.Background(), cfg))
-		case "status":
-			fmt.Print(cfhost.Status())
-			return
-		case "--version", "-v":
-			fmt.Println(version)
-			return
-		case "help", "-h", "--help":
-			usage()
-			return
-		default:
-			fmt.Fprintf(os.Stderr, "cfhost: unknown subcommand %q\n\n", args[0])
-			usage()
-			os.Exit(2)
-		}
+	// "run" is the argument the installed Windows service starts the
+	// executable with; treat it exactly like a bare invocation.
+	if daemonInvocation(args) {
+		runDaemon()
+		return
 	}
+	dispatch(args[0])
+}
 
-	// no subcommand: daemon mode (inside the Windows service or a terminal)
+// daemonInvocation reports whether the process should enter the daemon
+// loop: no subcommand at all, or the service manager's "run" argument.
+func daemonInvocation(args []string) bool {
+	return len(args) == 0 || args[0] == "run"
+}
+
+func runDaemon() {
 	cfg, err := cfhost.LoadConfig()
 	if err != nil {
 		exit(err)
@@ -57,6 +40,39 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
 	exit(cfhost.RunLoop(ctx, cfg))
+}
+
+// dispatch handles the management subcommands (it always exits).
+func dispatch(name string) {
+	switch name {
+	case "install":
+		exit(cfhost.Install())
+	case "uninstall":
+		exit(cfhost.Uninstall())
+	case "start":
+		exit(cfhost.Start())
+	case "stop":
+		exit(cfhost.Stop())
+	case "run-once":
+		cfg, err := cfhost.LoadConfig()
+		if err != nil {
+			exit(err)
+		}
+		exit(cfhost.RunOnce(context.Background(), cfg))
+	case "status":
+		fmt.Print(cfhost.Status())
+		return
+	case "--version", "-v":
+		fmt.Println(version)
+		return
+	case "help", "-h", "--help":
+		usage()
+		return
+	default:
+		fmt.Fprintf(os.Stderr, "cfhost: unknown subcommand %q\n\n", name)
+		usage()
+		os.Exit(2)
+	}
 }
 
 func exit(err error) {
@@ -70,7 +86,8 @@ func exit(err error) {
 func usage() {
 	fmt.Print(`usage: cfhost <subcommand>
 
-  (no args)    run the daemon loop (also used by the Windows service)
+  (no args)    run the daemon loop
+  run          run the daemon loop (how the installed Windows service starts it)
   run-once     run one fetch/probe/hosts cycle and exit
   install      install the Windows service
   uninstall    remove the Windows service

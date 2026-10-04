@@ -41,6 +41,8 @@ func SaveState(path string) error
 func LoadState(path string) error
 ```
 
+GithubStatus/SiteStatus 返回值永非 nil: 无活跃上报时返回空对象 (Sources/Hosts 为空), 调用方可直接解引用.
+
 数据所有权: 自学习, 专属, 运营商三张学习池表; 站点与 GitHub 两张按主机池表.
 
 扩展规则:

@@ -5,9 +5,9 @@
 
 ## 批 1: High (H1, H2)
 
-- [ ] H1: pool.GithubStatus/SiteStatus 返回非 nil 空对象 + TestAdminHealth 独立绿 + 空态断言
-- [ ] H2: main.go 增加 "run" 子命令进服务模式 + client-entry.md 登记 + 单测
-- [ ] 批末验证: go 三连 -race + acceptance f020/f019/f021 模块
+- [x] H1: pool.GithubStatus/SiteStatus 返回非 nil 空对象 + TestAdminHealth 独立绿 + 空态断言 (连带改判: internal/pool/state_test.go 三处空态断言 nil→hostStatusEmpty, 属契约变更直接后果)
+- [x] H2: main.go 增加 "run" 子命令进服务模式 + client-entry.md 登记 + 单测
+- [x] 批末验证: go 三连 -race + acceptance f020/f019/f021 模块
 
 ## 批 2: 服务端稳态与安全 (M1, M2, M3, M5, M6)
 
