@@ -21,13 +21,13 @@
 
 ## Acceptance Criteria
 
-- [ ] `python3 -m unittest discover -s test/acceptance` 全绿
-- [ ] 覆盖映射可审计: F-001 至 F-030 每条至少一个测试, 测试文件名或 docstring 标注 F 编号
-- [ ] test/ 下无非标准库 import; 无 .go 文件
-- [ ] `go build ./... && go vet ./... && go test ./...` 不受影响
-- [ ] ci.yml 含 acceptance 步; live 层不进 CI
-- [ ] test/live/ 在代理可用时手动跑通 (吸收原 e2e.sh 全部场景)
-- [ ] scripts/e2e.sh 已删除
+- [x] `python3 -m unittest discover -s test/acceptance` 全绿 (127 例, ~375s)
+- [x] 覆盖映射可审计: F-001 至 F-030 每条至少一个测试, 测试文件名或 docstring 标注 F 编号
+- [x] test/ 下无非标准库 import; 无 .go 文件
+- [x] `go build ./... && go vet ./... && go test ./...` 不受影响
+- [x] ci.yml 含 acceptance 步; live 层不进 CI
+- [x] test/live/ 在代理可用时手动跑通 (吸收原 e2e.sh 全部场景, 7 例绿)
+- [x] scripts/e2e.sh 已删除
 
 ## Notes
 
