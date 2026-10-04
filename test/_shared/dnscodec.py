@@ -233,7 +233,11 @@ def _parse_record(data, offset):
     elif rtype == TYPE_CNAME:
         rec["target"], _ = _decode_name(data, rstart)
     elif rtype == TYPE_HTTPS:
-        target, pstart = _decode_name(data, rstart)
+        # RFC 9460: RDATA = SvcPriority(2) + TargetName + SvcParams
+        if len(rdata) < 3:
+            raise DNSCodecError("https rdata too short (%d)" % len(rdata))
+        rec["svc_priority"] = struct.unpack(">H", rdata[:2])[0]
+        target, pstart = _decode_name(data, rstart + 2)
         rec["target"] = target
         params = _parse_svcb_params(rdata, pstart - rstart)
         rec["params"] = {key: _parse_svcb_value(key, value)
