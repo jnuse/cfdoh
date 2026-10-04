@@ -22,6 +22,9 @@ func resetPool(t *testing.T, base int64) {
 	mu.Unlock()
 	github = newHostPools(MaxHostSources)
 	sites = newHostPools(MaxHostSources)
+	tagMu.Lock()
+	cachedValid = false
+	tagMu.Unlock()
 	original := now
 	now = func() int64 { return base }
 	t.Cleanup(func() { now = original })

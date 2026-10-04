@@ -2,6 +2,7 @@ package rules
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -445,4 +446,48 @@ func TestParseWrongTypedFieldsTolerated(t *testing.T) {
 	if out := rs.Apply(q, resp); out != resp {
 		t.Fatal("wrong-typed fields must behave as absent")
 	}
+}
+
+func TestParseFlatShorthand(t *testing.T) {
+	// flat form: match conditions, string action and ipv4/ipv6 values on the
+	// rule object itself (the host-map key convention lifted into array rules)
+	rs := mustParse(t, `[
+		{"domain_suffix":"blocked.example.com","action":"block"},
+		{"domain_suffix":"plain.example.org","action":"replace-a","ipv4":["203.0.113.60","bad","203.0.113.60"]},
+		{"domain_suffix":"forced.example.com","action":"enable-ecs"},
+		{"domain_suffix":"noecs.example.cn","action":"disable-ecs"}
+	]`)
+	if !rs.ShouldBlock(queryPacket("blocked.example.com", wire.TypeA)) {
+		t.Fatal("flat block failed")
+	}
+	if rs.ShouldBlock(queryPacket("other.example.com", wire.TypeA)) {
+		t.Fatal("flat block matched an unrelated domain")
+	}
+	q := queryPacket("plain.example.org", wire.TypeA)
+	resp := responseOf(q,
+		aRecord("plain.example.org", 222, "93.184.216.35"),
+		aRecord("plain.example.org", 111, "93.184.216.34"))
+	out := rs.Apply(q, resp)
+	if got := answerIPsOf(out); len(got) != 1 || got[0] != "203.0.113.60:111" {
+		t.Fatalf("flat replace-a = %v, want one 203.0.113.60 record with the inherited TTL 111", got)
+	}
+	if value, present := rs.EcsOverride(queryPacket("x.forced.example.com", wire.TypeA)); !present || !value {
+		t.Fatalf("flat enable-ecs = %v/%v", value, present)
+	}
+	if value, present := rs.EcsOverride(queryPacket("x.noecs.example.cn", wire.TypeA)); !present || value {
+		t.Fatalf("flat disable-ecs = %v/%v", value, present)
+	}
+	if _, present := rs.EcsOverride(queryPacket("plain.example.org", wire.TypeA)); present {
+		t.Fatal("non-ecs rule must not contribute an override")
+	}
+}
+
+func answerIPsOf(resp *wire.Packet) []string {
+	var out []string
+	for _, r := range resp.Answers {
+		if a, ok := r.RData.(wire.A); ok {
+			out = append(out, wire.IPv4String(a.IP)+":"+fmt.Sprintf("%d", r.TTL))
+		}
+	}
+	return out
 }

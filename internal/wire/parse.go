@@ -56,6 +56,18 @@ func (p *parser) take(n int) ([]byte, error) {
 // counts, hostile label types, out-of-order SVCB params and any structure that
 // would alias the input buffer (all decoded payloads are deep-copied).
 func Parse(b []byte) (*Packet, error) {
+	return parse(b, false)
+}
+
+// ParseRelaxed decodes a DNS message the way tolerant resolvers treat
+// upstream responses: the header counts define the message and bytes beyond
+// the last declared record are ignored (the dns-packet baseline behavior).
+// Inbound queries keep the strict Parse (F-002 rejects trailing bytes).
+func ParseRelaxed(b []byte) (*Packet, error) {
+	return parse(b, true)
+}
+
+func parse(b []byte, allowTrailing bool) (*Packet, error) {
 	if len(b) < 12 {
 		return nil, fmt.Errorf("message too short: %d bytes", len(b))
 	}
@@ -102,7 +114,7 @@ func Parse(b []byte) (*Packet, error) {
 	if pkt.Additionals, err = p.decodeRecords(int(h.ARCount)); err != nil {
 		return nil, err
 	}
-	if p.off != len(b) {
+	if !allowTrailing && p.off != len(b) {
 		return nil, fmt.Errorf("trailing data: %d bytes after message", len(b)-p.off)
 	}
 	return pkt, nil

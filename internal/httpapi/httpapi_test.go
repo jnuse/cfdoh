@@ -17,6 +17,7 @@ import (
 
 	"github.com/jnuse/cfdoh/internal/cfrange"
 	"github.com/jnuse/cfdoh/internal/config"
+	"github.com/jnuse/cfdoh/internal/ech"
 	"github.com/jnuse/cfdoh/internal/pool"
 	"github.com/jnuse/cfdoh/internal/wire"
 )
@@ -1075,4 +1076,108 @@ func freePort(t *testing.T) int {
 	}
 	defer l.Close()
 	return l.Addr().(*net.TCPAddr).Port
+}
+
+func TestAdminSelfcheckMetaEch(t *testing.T) {
+	ech.ClearMeta()
+	t.Cleanup(ech.ClearMeta)
+	cfg := baseCfg()
+	cfg.AdminToken = "admin-tok"
+	ts, _ := newTS(t, cfg)
+
+	listA := []byte{0, 6, 1, 2, 0, 2, 3, 4} // valid ECHConfigList, fits exactly
+	b64A := base64.StdEncoding.EncodeToString(listA)
+
+	post := func(payload map[string]any) int {
+		body, _ := json.Marshal(payload)
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/selfcheck", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer admin-tok")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// rotated with a valid config: learned override installed, generation bumped
+	if code := post(map[string]any{"source": "meta-probe", "ok": true,
+		"metaEch": map[string]any{"state": "rotated", "echConfig": b64A}}); code != 200 {
+		t.Fatalf("rotated POST = %d, want 200", code)
+	}
+	if cfgList, state := ech.MetaOverride(); state != ech.MetaLearned || string(cfgList) != string(listA) {
+		t.Fatalf("override after rotated = %d %v, want learned %v", state, cfgList, listA)
+	}
+	learnedTag := ech.MetaCacheTag()
+
+	// the plain selfcheck part rode along in the same POST
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/selfcheck", nil)
+	req.Header.Set("Authorization", "Bearer admin-tok")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reports []map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&reports)
+	resp.Body.Close()
+	if len(reports) != 1 {
+		t.Fatalf("selfcheck reports = %d, want 1 (metaEch must coexist)", len(reports))
+	}
+
+	// ok with a byte-identical verified: renews the learned key, no generation bump
+	if code := post(map[string]any{"source": "meta-probe", "ok": true,
+		"metaEch": map[string]any{"state": "ok", "verified": b64A}}); code != 200 {
+		t.Fatalf("ok/verified POST = %d, want 200", code)
+	}
+	if _, state := ech.MetaOverride(); state != ech.MetaLearned {
+		t.Fatalf("state after verified ok = %d, want learned (renewed, not seed)", state)
+	}
+	if ech.MetaCacheTag() != learnedTag {
+		t.Fatal("renewal with identical bytes must not bump the generation")
+	}
+
+	// broken: suspension, injection stops
+	if code := post(map[string]any{"source": "meta-probe", "ok": true,
+		"metaEch": map[string]any{"state": "broken", "reason": "edge rejects"}}); code != 200 {
+		t.Fatalf("broken POST = %d, want 200", code)
+	}
+	if _, state := ech.MetaOverride(); state != ech.MetaSuspended {
+		t.Fatalf("state after broken = %d, want suspended", state)
+	}
+
+	// ok without verified: clears the override back to the seed
+	if code := post(map[string]any{"source": "meta-probe", "ok": true,
+		"metaEch": map[string]any{"state": "ok"}}); code != 200 {
+		t.Fatalf("ok POST = %d, want 200", code)
+	}
+	if _, state := ech.MetaOverride(); state != ech.MetaSeed {
+		t.Fatalf("state after ok = %d, want seed", state)
+	}
+
+	// rotated with invalid base64: 400 and the override cleared to the seed
+	if code := post(map[string]any{"source": "meta-probe", "ok": true,
+		"metaEch": map[string]any{"state": "rotated", "echConfig": b64A}}); code != 200 {
+		t.Fatalf("rotated POST (setup) = %d, want 200", code)
+	}
+	if code := post(map[string]any{"source": "meta-probe", "ok": true,
+		"metaEch": map[string]any{"state": "rotated", "echConfig": "!!not-base64!!"}}); code != 400 {
+		t.Fatalf("invalid rotated POST = %d, want 400", code)
+	}
+	if _, state := ech.MetaOverride(); state != ech.MetaSeed {
+		t.Fatalf("state after invalid rotated = %d, want seed (override cleared)", state)
+	}
+
+	// unknown state: 400, state untouched
+	if code := post(map[string]any{"source": "meta-probe", "ok": true,
+		"metaEch": map[string]any{"state": "rotated", "echConfig": b64A}}); code != 200 {
+		t.Fatalf("rotated POST (setup 2) = %d, want 200", code)
+	}
+	if code := post(map[string]any{"source": "meta-probe", "ok": true,
+		"metaEch": map[string]any{"state": "wat"}}); code != 400 {
+		t.Fatalf("unknown state POST = %d, want 400", code)
+	}
+	if _, state := ech.MetaOverride(); state != ech.MetaLearned {
+		t.Fatalf("state after unknown state = %d, want learned (untouched)", state)
+	}
 }

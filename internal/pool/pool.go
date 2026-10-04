@@ -161,15 +161,17 @@ func SetLearned(ipv4, ipv6 []string, ttl int, source, scope string) error {
 		expiresAt: now() + int64(ttl)*1000,
 		source:    source,
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if scope == "" {
-		defaults.set(source, pool)
-	} else if strings.HasPrefix(scope, "isp:") {
-		ispPools.set(scope, pool)
-	} else {
-		scoped.set(scope, pool)
-	}
+	mutate(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if scope == "" {
+			defaults.set(source, pool)
+		} else if strings.HasPrefix(scope, "isp:") {
+			ispPools.set(scope, pool)
+		} else {
+			scoped.set(scope, pool)
+		}
+	})
 	slog.Info("event", "event", "preferred_pool_updated", "detail",
 		fmt.Sprintf("source=%s scope=%s ipv4=%d ipv6=%d ttl=%d", source, scope, len(pool.ipv4), len(pool.ipv6), ttl))
 	return nil

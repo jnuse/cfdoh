@@ -148,9 +148,11 @@ func RewriteX(resp, q *wire.Packet, p *pool.Pool, cfg *config.Config) *wire.Pack
 }
 
 // PinAddresses pins the query-name A records of the answer to ips and drops
-// every AAAA record (pinned hosts are served IPv4-only). Records the query
-// name does not own stay untouched; without a query-name A record nothing is
-// synthesized. Used for the site and GitHub host pools.
+// every AAAA record (pinned hosts are served IPv4-only). An AAAA query loses
+// its AAAA records even with no A records to pin — the drop is the point, not
+// a side effect of pinning (F-014: GitHub 与站点池不返回 AAAA). Records the
+// query name does not own stay untouched; without a query-name A record an
+// A query is returned verbatim. Used for the site and GitHub host pools.
 func PinAddresses(resp, q *wire.Packet, ips []string) *wire.Packet {
 	if resp == nil || q == nil || len(q.Questions) == 0 || len(ips) == 0 {
 		return resp
@@ -159,6 +161,14 @@ func PinAddresses(resp, q *wire.Packet, ips []string) *wire.Packet {
 		if _, err := wire.ParseIPv4(ip); err != nil {
 			return resp
 		}
+	}
+	if q.Questions[0].Type == wire.TypeAAAA {
+		answers := dropType(resp.Answers, wire.TypeAAAA)
+		if len(answers) == len(resp.Answers) {
+			return resp
+		}
+		resp.Answers = answers
+		return resp
 	}
 	qname := wire.CanonicalName(q.Questions[0].Name)
 	first := -1
@@ -238,8 +248,11 @@ func PinHTTPSHints(resp *wire.Packet, ips []string) *wire.Packet {
 
 // InjectECH writes cfgList into the ech parameter of every HTTPS record; an
 // answer without HTTPS records gets one synthesized under the query name
-// (priority 1, target ".", TTL 300, ech plus alpn when alpn is non-empty). A
-// config list shorter than minECHConfigList leaves the answer untouched.
+// (priority 1, target ".", TTL 300, ech plus alpn, alpn defaulting to h2).
+// A non-nil alpn also replaces the ALPN of upstream records — the h3 verdict
+// gate must reach existing records, not only synthesized ones; a nil alpn
+// keeps the upstream ALPN as published. A config list shorter than
+// minECHConfigList leaves the answer untouched.
 func InjectECH(resp *wire.Packet, cfgList []byte, alpn []string) *wire.Packet {
 	if resp == nil || len(cfgList) < minECHConfigList || len(resp.Questions) == 0 {
 		return resp
@@ -256,14 +269,22 @@ func InjectECH(resp *wire.Packet, cfgList []byte, alpn []string) *wire.Packet {
 			continue
 		}
 		wire.UpsertSvcParam(r, wire.ParamECH, cfgList)
+		if len(alpn) > 0 {
+			if packed := packAlpn(alpn); packed != nil {
+				wire.UpsertSvcParam(r, wire.ParamALPN, packed)
+			}
+		}
 		found = true
 	}
 	if !found {
+		// a synthetic record always advertises an ALPN list, h2 when ungated
+		synthAlpn := alpn
+		if len(synthAlpn) == 0 {
+			synthAlpn = []string{"h2"}
+		}
 		params := make([]wire.SvcParam, 0, 2)
-		if len(alpn) > 0 {
-			if packed := packAlpn(alpn); packed != nil {
-				params = append(params, wire.SvcParam{Key: wire.ParamALPN, Value: packed})
-			}
+		if packed := packAlpn(synthAlpn); packed != nil {
+			params = append(params, wire.SvcParam{Key: wire.ParamALPN, Value: packed})
 		}
 		params = append(params, wire.SvcParam{Key: wire.ParamECH, Value: append([]byte(nil), cfgList...)})
 		answers = append(answers, wire.Record{

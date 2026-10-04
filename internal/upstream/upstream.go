@@ -180,7 +180,7 @@ func attempt(ctx context.Context, upstream string, query []byte, cfg *config.Con
 	if len(body) > cfg.MaxDNSPacketSize {
 		return nil, errors.New("response too large")
 	}
-	parsed, err := wire.Parse(body)
+	parsed, err := wire.ParseRelaxed(body)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +230,7 @@ func resolveFamily(ctx context.Context, name string, qtype uint16, cfg *config.C
 	if err != nil {
 		return nil, err
 	}
-	parsed, err := wire.Parse(result.Packet)
+	parsed, err := wire.ParseRelaxed(result.Packet)
 	if err != nil {
 		return nil, err
 	}

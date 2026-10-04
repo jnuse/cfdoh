@@ -82,7 +82,8 @@ type RuleSet struct {
 }
 
 // Parse decodes the three accepted shapes: bare rule array, {"rules": [...]}
-// wrapper and host-map shorthand. Wrong-typed fields are treated as absent;
+// wrapper and host-map shorthand. Rules accept the nested form and the flat
+// shorthand (see parseRule). Wrong-typed fields are treated as absent;
 // non-object array items are skipped; the result is capped at maxRules.
 func Parse(data []byte) (*RuleSet, error) {
 	trimmed := strings.TrimSpace(string(data))
@@ -129,10 +130,22 @@ func parseRuleArray(raw json.RawMessage) (*RuleSet, error) {
 	return out, nil
 }
 
+// parseRule decodes one rule in either accepted form. The canonical form
+// nests the conditions under "match" and carries the action under "action"
+// (string shorthand or object); the flat shorthand puts the match conditions
+// (domain_exact, domain_suffix, qtype, response_ip_cidr) and the replacement
+// values (ipv4/ipv6, same keys as the host-map shorthand) on the rule object
+// itself. Wrong-typed fields are treated as absent in both forms.
 func parseRule(item json.RawMessage) (*Rule, bool) {
 	var raw struct {
-		Match  json.RawMessage `json:"match"`
-		Action json.RawMessage `json:"action"`
+		Match          json.RawMessage `json:"match"`
+		Action         json.RawMessage `json:"action"`
+		DomainExact    json.RawMessage `json:"domain_exact"`
+		DomainSuffix   json.RawMessage `json:"domain_suffix"`
+		QType          json.RawMessage `json:"qtype"`
+		ResponseIPCIDR json.RawMessage `json:"response_ip_cidr"`
+		IPv4           []string        `json:"ipv4"`
+		IPv6           []string        `json:"ipv6"`
 	}
 	if err := json.Unmarshal(item, &raw); err != nil {
 		return nil, false
@@ -141,8 +154,22 @@ func parseRule(item json.RawMessage) (*Rule, bool) {
 	if len(raw.Match) > 0 {
 		parseMatch(raw.Match, &rule.Match)
 	}
+	// flat shorthand conditions merge after the nested ones; each accepts a
+	// scalar or a list
+	rule.Match.DomainExact = append(rule.Match.DomainExact, stringOrList(raw.DomainExact)...)
+	rule.Match.DomainSuffix = append(rule.Match.DomainSuffix, stringOrList(raw.DomainSuffix)...)
+	rule.Match.QType = append(rule.Match.QType, qtypeList(raw.QType)...)
+	rule.Match.ResponseIPCIDR = append(rule.Match.ResponseIPCIDR, stringOrList(raw.ResponseIPCIDR)...)
 	if len(raw.Action) > 0 {
 		parseAction(raw.Action, &rule.Action)
+	}
+	// flat ipv4/ipv6 carry replacement addresses exactly like host-map
+	// values; they fill the action only when it did not carry its own list
+	if len(rule.Action.ReplaceA) == 0 {
+		rule.Action.ReplaceA = validAddresses(raw.IPv4, 4)
+	}
+	if len(rule.Action.ReplaceAAAA) == 0 {
+		rule.Action.ReplaceAAAA = validAddresses(raw.IPv6, 6)
 	}
 	rule.compile()
 	return rule, true

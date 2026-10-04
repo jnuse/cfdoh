@@ -99,7 +99,7 @@ func ConfigFor(ctx context.Context, sourceDomain string, cfg *config.Config) ([]
 	if err != nil {
 		return nil, err
 	}
-	parsed, err := wire.Parse(result.Packet)
+	parsed, err := wire.ParseRelaxed(result.Packet)
 	if err != nil {
 		return nil, err
 	}

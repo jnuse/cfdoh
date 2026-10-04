@@ -92,26 +92,28 @@ func LoadState(path string) error {
 	}
 
 	current := now()
-	mu.Lock()
-	defaults = newPoolTable(MaxDefaultSources)
-	scoped = newPoolTable(MaxScopedPools)
-	ispPools = newPoolTable(MaxIspPools)
-	seenDefault := make(map[string]bool, len(file.Learned))
-	for _, entry := range file.Learned {
-		if entry.Source == "" || seenDefault[entry.Source] || entry.ExpiresAt <= current {
-			continue
+	mutate(func() {
+		mu.Lock()
+		defaults = newPoolTable(MaxDefaultSources)
+		scoped = newPoolTable(MaxScopedPools)
+		ispPools = newPoolTable(MaxIspPools)
+		seenDefault := make(map[string]bool, len(file.Learned))
+		for _, entry := range file.Learned {
+			if entry.Source == "" || seenDefault[entry.Source] || entry.ExpiresAt <= current {
+				continue
+			}
+			seenDefault[entry.Source] = true
+			defaults.set(entry.Source, &learnedPool{
+				ipv4: entry.IPv4, ipv6: entry.IPv6, expiresAt: entry.ExpiresAt, source: entry.Source,
+			})
 		}
-		seenDefault[entry.Source] = true
-		defaults.set(entry.Source, &learnedPool{
-			ipv4: entry.IPv4, ipv6: entry.IPv6, expiresAt: entry.ExpiresAt, source: entry.Source,
-		})
-	}
-	restoreScoped(scoped, file.Scoped, current)
-	restoreScoped(ispPools, file.Isp, current)
-	mu.Unlock()
+		restoreScoped(scoped, file.Scoped, current)
+		restoreScoped(ispPools, file.Isp, current)
+		mu.Unlock()
 
-	github.restore(file.Github, current)
-	sites.restore(file.Sites, current)
+		github.restore(file.Github, current)
+		sites.restore(file.Sites, current)
+	})
 	return nil
 }
 

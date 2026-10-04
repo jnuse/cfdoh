@@ -159,14 +159,14 @@ func resolveFresh(ctx context.Context, query []byte, opts *Options, cfg *config.
 		note(notes, "upstream: all upstreams failed: %v", err)
 		return nil, err
 	}
-	resp, err := wire.Parse(res.Packet)
+	resp, err := wire.ParseRelaxed(res.Packet)
 	if err != nil {
 		note(notes, "upstream: winning answer failed to parse: %v", err)
 		return nil, err
 	}
 	note(notes, "upstream: winner %s", hostOf(res.Upstream))
 
-	applyRewriteChain(ctx, plan, resp, rewriteCfg(cfg, plan.pool), notes)
+	resp = applyRewriteChain(ctx, plan, resp, rewriteCfg(cfg, plan.pool), notes)
 	if store {
 		// The baseline (refer resolveAndStore) caches the post-rewrite wire:
 		// the identity already folds the pool scope/variant, so a hit must
@@ -275,6 +275,11 @@ func prepareFull(ctx context.Context, query []byte, opts *Options, cfg *config.C
 		clientScope = base.ecsVal.Identity
 	}
 	ispScope, _ := isp.ScopeOf(ctx, opts.ClientIP, cfg)
+	// Sample the pool content tag BEFORE resolving the pool: a flip landing
+	// between the two would cache the old pool's rewrite under the new tag
+	// and keep serving it until the TTL — with this order a raced write can
+	// only leave a dead entry, never a stale-serving one.
+	poolTag := pool.ContentTag()
 	p, poolErr := pool.Preferred(ctx, opts.PreferredIPv4, opts.PreferredIPv6, opts.CfDomains, opts.CfDomainIsDefault, cfg, clientScope, ispScope)
 	explicit := len(opts.PreferredIPv4) > 0 || len(opts.PreferredIPv6) > 0 ||
 		(!opts.CfDomainIsDefault && len(opts.CfDomains) > 0)
@@ -285,7 +290,7 @@ func prepareFull(ctx context.Context, query []byte, opts *Options, cfg *config.C
 		p = nil // default pool down: answer unrewritten, resolution continues
 	}
 	qname := wire.CanonicalName(base.query.Questions[0].Name)
-	variant := buildVariant(opts, qname, p, cfg)
+	variant := buildVariant(opts, qname, p, cfg, poolTag)
 	id, err := cache.IdentityOf(base.query, base.ecsID, variant)
 	if err != nil {
 		return nil, err
@@ -311,13 +316,17 @@ func loadRules(ctx context.Context, opts *Options, cfg *config.Config) *rules.Ru
 }
 
 // buildVariant assembles the variant segment of the cache key. Pool flips
-// (h3 verdicts, Meta ECH rotation, site-pool content) change their tag and
-// therefore the key, taking effect immediately instead of waiting for TTLs.
-func buildVariant(opts *Options, qname string, p *pool.Pool, cfg *config.Config) string {
+// change it and therefore the key, taking effect immediately instead of
+// waiting for TTLs: the global content tag covers every pool table's
+// content (learned default/scoped/isp, GitHub, sites), the per-host site
+// tag pins site pools precisely, and h3 verdicts and Meta ECH rotations
+// carry their own generations (folded once here, never twice).
+func buildVariant(opts *Options, qname string, p *pool.Pool, cfg *config.Config, poolTag string) string {
 	var parts []string
 	if opts.CacheVariant != "" {
 		parts = append(parts, "req="+opts.CacheVariant)
 	}
+	parts = append(parts, "poolcontent="+poolTag)
 	if p != nil && p.Scope != "" {
 		parts = append(parts, "pools="+p.Scope)
 	}
@@ -331,28 +340,59 @@ func buildVariant(opts *Options, qname string, p *pool.Pool, cfg *config.Config)
 	return strings.Join(parts, ",")
 }
 
-// applyRewriteChain runs the ordered rewrite chain over one upstream answer.
+// applyRewriteChain runs the ordered rewrite chain over one upstream answer
+// and returns the rewritten answer — every step builds a fresh packet, so the
+// caller must take the return value (an in-place reassignment of the
+// parameter would leave the caller serving the raw upstream answer).
 // Every step is individually best-effort: a failing step is skipped (noted)
 // and the answer still goes out.
-func applyRewriteChain(ctx context.Context, plan *fullPlan, resp *wire.Packet, cfg *config.Config, notes *[]string) {
+func applyRewriteChain(ctx context.Context, plan *fullPlan, resp *wire.Packet, cfg *config.Config, notes *[]string) *wire.Packet {
 	q := plan.base.query
 	qname := plan.qname
 
 	resp = plan.base.ruleSet.Apply(q, resp)
 
+	// Determination inputs per F-012 (判定用上游原始地址), captured before
+	// any rewrite mutates the answer. upstreamUsesCF is the answer-local
+	// check (A/AAAA records plus HTTPS hints) and costs no network — the
+	// baseline's rewriteCloudflareAddresses gates the pool rewrite exactly
+	// there. The name classification below is lazy: an HTTPS or empty answer
+	// carries no address records, so when a consumer needs the site's
+	// Cloudflare classification the query name is resolved like the
+	// baseline's resolveDomainAddresses.
+	ranges := cfrange.Current()
 	upstreamV4, upstreamV6 := answerAddresses(resp)
-	onCF, cfErr := rewrite.OnCloudflare(ctx, qname, cfrange.Current(), cfg, upstreamV4, upstreamV6)
-	if cfErr != nil {
-		note(notes, "cloudflare: determination failed (%v), treated as not Cloudflare", cfErr)
-	} else {
-		note(notes, "cloudflare: %t (upstream v4=%v v6=%v)", onCF, upstreamV4, upstreamV6)
+	upstreamUsesCF := rewrite.UsesCloudflare(resp, ranges)
+	var classified *bool
+	classify := func() bool {
+		if classified != nil {
+			return *classified
+		}
+		v4, v6 := upstreamV4, upstreamV6
+		if len(v4) == 0 && len(v6) == 0 {
+			if rv4, rv6, rerr := upstream.ResolveAddresses(ctx, qname, cfg); rerr == nil {
+				v4, v6 = rv4, rv6
+			}
+		}
+		onCF, err := rewrite.OnCloudflare(ctx, qname, ranges, cfg, v4, v6)
+		if err != nil {
+			note(notes, "cloudflare: determination failed (%v), treated as not Cloudflare", err)
+		} else {
+			note(notes, "cloudflare: %t (upstream v4=%v v6=%v)", onCF, v4, v6)
+		}
+		classified = &onCF
+		return onCF
+	}
+	// explain collects the full decision chain: force the classification
+	// step so the chain always carries it; the service path classifies
+	// lazily, only when a consumer actually needs the verdict.
+	if notes != nil {
+		classify()
 	}
 
 	if plan.pool != nil {
 		note(notes, "pool: scope=%q v4=%d v6=%d", plan.pool.Scope, len(plan.pool.IPv4), len(plan.pool.IPv6))
-		if onCF {
-			resp = rewrite.RewriteAddresses(resp, cfrange.Current(), plan.pool, cfg)
-		}
+		resp = rewrite.RewriteAddresses(resp, ranges, plan.pool, rewriteCfg(cfg, plan.pool))
 		if domainMatch(qname, cfg.XDomains) {
 			resp = rewrite.RewriteX(resp, q, plan.pool, cfg)
 		}
@@ -360,9 +400,11 @@ func applyRewriteChain(ctx context.Context, plan *fullPlan, resp *wire.Packet, c
 		note(notes, "pool: unavailable, answering unrewritten")
 	}
 
+	sitePinned := false
 	if ips := pool.SitePoolFor(qname); len(ips) > 0 {
 		resp = rewrite.PinAddresses(resp, q, ips)
 		resp = rewrite.PinHTTPSHints(resp, ips)
+		sitePinned = true
 		note(notes, "site-pool: pinned %d addresses", len(ips))
 	}
 	githubPinned := false
@@ -373,20 +415,27 @@ func applyRewriteChain(ctx context.Context, plan *fullPlan, resp *wire.Packet, c
 		note(notes, "github-pool: pinned %d addresses", len(ips))
 	}
 
-	if q.Questions[0].Type == wire.TypeHTTPS && !githubPinned {
-		resp = injectECH(ctx, plan, resp, onCF, cfg, notes)
+	// 钉住域名不经通用 ECH 链: GitHub 不注入; 站点池保留上游自带 ECH (F-014).
+	if q.Questions[0].Type == wire.TypeHTTPS && !githubPinned && !sitePinned {
+		resp = injectECH(ctx, plan, resp, cfg, notes, classify)
 	}
-	if onCF {
+	// ECH hosts flatten so every record shares the query-name owner: the
+	// configured Meta/ECH domains, any positively classified name, or an
+	// upstream answer that itself sits inside the published ranges.
+	echHost := cfg.EchEnabled && (domainMatch(qname, cfg.MetaDomains) || domainMatch(qname, cfg.EchDomains))
+	if echHost || (classified != nil && *classified) || upstreamUsesCF {
 		resp = rewrite.Flatten(resp)
 	}
+	return resp
 }
 
 // injectECH applies the ECH injection policy for one HTTPS answer, by source
 // priority: request ?ech= domain, the Meta three-state override (Meta
-// domains), the configured base64 list (ECH_DOMAINS), and finally the
-// published source domain for Cloudflare-served hosts. Failures never block
-// the answer.
-func injectECH(ctx context.Context, plan *fullPlan, resp *wire.Packet, onCF bool, cfg *config.Config, notes *[]string) *wire.Packet {
+// domains), the configured base64 list (ECH_DOMAINS), and finally — for
+// names the classify callback places on Cloudflare — the static base64 list
+// with the source domain's HTTPS record as fallback (F-010 priority).
+// Failures never block the answer.
+func injectECH(ctx context.Context, plan *fullPlan, resp *wire.Packet, cfg *config.Config, notes *[]string, classify func() bool) *wire.Packet {
 	qname := plan.qname
 	fallback := echAlpnFallback(qname, cfg)
 
@@ -424,13 +473,28 @@ func injectECH(ctx context.Context, plan *fullPlan, resp *wire.Packet, onCF bool
 
 	resp = rewrite.InjectConfigured(resp, cfg)
 
-	if cfg.EchEnabled && onCF {
-		if cfgList, err := ech.ConfigFor(ctx, cfg.EchSourceDomain, cfg); err == nil {
+	if cfg.EchEnabled && classify() {
+		// F-010 来源优先级: 静态 ECH_CONFIG_BASE64 先于源域名 HTTPS 记录;
+		// 源域名不可达不阻塞应答 (无 ECH 返回).
+		cfgList, src := []byte(nil), ""
+		if cfg.EchConfigBase64 != "" {
+			if b, verr := ech.Validated(cfg.EchConfigBase64); verr == nil {
+				cfgList, src = b, "ECH_CONFIG_BASE64"
+			} else {
+				note(notes, "ech: configured base64 invalid (%v), trying the source domain", verr)
+			}
+		}
+		if cfgList == nil {
+			if b, verr := ech.ConfigFor(ctx, cfg.EchSourceDomain, cfg); verr == nil {
+				cfgList, src = b, cfg.EchSourceDomain
+			}
+		}
+		if cfgList != nil {
 			alpn, why := h3.AlpnFor(qname, fallback)
-			note(notes, "ech: injected from %s (%s)", cfg.EchSourceDomain, why)
+			note(notes, "ech: injected from %s (%s)", src, why)
 			return rewrite.InjectECH(resp, cfgList, alpn)
 		}
-		note(notes, "ech: source domain %s unusable, not injected", cfg.EchSourceDomain)
+		note(notes, "ech: no usable config (base64 unset/invalid, source domain %s unusable), not injected", cfg.EchSourceDomain)
 	}
 	return resp
 }

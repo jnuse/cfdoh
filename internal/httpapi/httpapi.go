@@ -991,10 +991,68 @@ type selfcheckReport struct {
 }
 
 type selfcheckPost struct {
-	Source   string   `json:"source"`
-	OK       bool     `json:"ok"`
-	Problems []string `json:"problems"`
-	Hosts    []string `json:"hosts"`
+	Source   string       `json:"source"`
+	OK       bool         `json:"ok"`
+	Problems []string     `json:"problems"`
+	Hosts    []string     `json:"hosts"`
+	MetaEch  *metaEchPost `json:"metaEch"`
+}
+
+// metaEchPost is the optional Meta ECH three-state report riding a selfcheck
+// POST (F-015): state "ok" (the effective config works), "rotated" (the
+// server's key was rejected, echConfig carries the recovered retry config)
+// or "broken" (no usable key recovered). Semantics follow the refer
+// baseline's /admin/health handler; one documented divergence: a rotated
+// report with an undecodable echConfig is rejected AND clears the override
+// back to the seed (the prober just disputed the effective key, so the old
+// override cannot be kept on trust).
+type metaEchPost struct {
+	State     string `json:"state"`
+	EchConfig string `json:"echConfig"`
+	Verified  string `json:"verified"`
+	TTL       int    `json:"ttl"`
+	Reason    string `json:"reason"`
+}
+
+// applyMetaEchReport decodes and applies one Meta ECH three-state report to
+// the ech override machine. A structural error (unknown state, invalid
+// base64 on rotated) rejects the whole POST with 400.
+func applyMetaEchReport(source string, report *metaEchPost) error {
+	ttl := report.TTL
+	if ttl <= 0 {
+		ttl = 86400
+	}
+	ttl = clamp(ttl, 300, 604800)
+	reason := truncate(report.Reason, 200)
+	switch report.State {
+	case "ok":
+		// A verified prober report byte-identical to the learned key renews
+		// it instead of falling back to the (possibly dead) seed; anything
+		// else clears the override.
+		var verified []byte
+		if report.Verified != "" {
+			if b, err := ech.Validated(report.Verified); err == nil {
+				verified = b
+			}
+		}
+		ech.MetaConfirm(verified, ttl, source)
+		return nil
+	case "rotated":
+		learned, err := ech.Validated(report.EchConfig)
+		if err != nil {
+			ech.ClearMeta()
+			slog.Warn("event", "event", "meta_ech_report_rejected", "detail",
+				fmt.Sprintf("source=%s error=%v; override cleared to seed", source, err))
+			return errors.New("echConfig must be a valid base64 ECHConfigList")
+		}
+		ech.SetMeta(learned, ttl, source, reason)
+		return nil
+	case "broken":
+		ech.SetMetaSuspended(min(ttl, 86400), source, reason)
+		return nil
+	default:
+		return fmt.Errorf(`metaEch state must be "ok", "rotated" or "broken"`)
+	}
 }
 
 // handleAdminSelfcheck stores and serves the self-check report table (at
@@ -1027,6 +1085,12 @@ func (s *Server) handleAdminSelfcheck(w http.ResponseWriter, r *http.Request, is
 		}
 		for i := range req.Problems {
 			req.Problems[i] = truncate(req.Problems[i], 300)
+		}
+		if req.MetaEch != nil {
+			if err := applyMetaEchReport(source, req.MetaEch); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
 		s.storeSelfcheck(source, req.OK, req.Problems, req.Hosts)
 		if !req.OK {

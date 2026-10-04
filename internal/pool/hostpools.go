@@ -162,7 +162,7 @@ var (
 
 // SetGithub replaces one source's GitHub host pools.
 func SetGithub(source string, hosts map[string][]string, ttl int) {
-	github.set(source, hosts, ttl)
+	mutate(func() { github.set(source, hosts, ttl) })
 	slog.Info("event", "event", "github_pools_updated", "detail",
 		fmt.Sprintf("source=%s hosts=%d ttl=%d", source, len(hosts), ttl))
 }
@@ -170,7 +170,7 @@ func SetGithub(source string, hosts map[string][]string, ttl int) {
 // SetSites replaces one source's site pools. A report without a host
 // withdraws that source's override for it.
 func SetSites(source string, hosts map[string][]string, ttl int) {
-	sites.set(source, hosts, ttl)
+	mutate(func() { sites.set(source, hosts, ttl) })
 	slog.Info("event", "event", "site_pools_updated", "detail",
 		fmt.Sprintf("source=%s hosts=%v ttl=%d", source, hostKeys(hosts), ttl))
 }

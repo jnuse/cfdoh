@@ -645,3 +645,84 @@ func TestChromiumECHVerdict(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveRuleReplaceReachesClient(t *testing.T) {
+	// Regression: the rewrite chain must hand its rewritten packet back to
+	// the caller — rule replace actions build a fresh packet, so a chain that
+	// only reassigns its local pointer serves the raw upstream answer.
+	resetCache()
+	srv, _ := newFakeUpstream(t, respondWith(func(q wire.Question) []wire.Record {
+		return []wire.Record{
+			aRec(q.Name, "93.184.216.35", 222),
+			aRec(q.Name, "93.184.216.34", 111),
+		}
+	}))
+	cfg := baseCfg(srv.URL)
+	cfg.RulesJSON = `[{"domain_suffix":"plain.example.org","action":"replace-a","ipv4":["203.0.113.60"]}]`
+
+	answer, err := Resolve(context.Background(), buildQuery(7, "www.plain.example.org", wire.TypeA), &Options{}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := wire.Parse(answer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []wire.Record
+	for _, r := range parsed.Answers {
+		if r.Type == wire.TypeA {
+			got = append(got, r)
+		}
+	}
+	if len(got) != 1 || wire.IPv4String(got[0].RData.(wire.A).IP) != "203.0.113.60" || got[0].TTL != 111 {
+		t.Fatalf("served A = %+v, want the rule-replaced 203.0.113.60 with inherited TTL 111", got)
+	}
+}
+
+// A pool uploaded AFTER a query was cached must take effect on the next
+// same-key query, not after the answer TTL (F-004: pool flips fold into the
+// cache variant; F-007/F-028: pool updates are immediately observable).
+// Pins the fix for the no-pool → cache → /admin/preferred default-pool
+// upload defect: same-scope content changes flip the key too.
+func TestResolvePoolUploadInvalidatesCacheKey(t *testing.T) {
+	resetCache()
+	loadRanges(t)
+	srv, hits := newFakeUpstream(t, respondWith(func(q wire.Question) []wire.Record {
+		return []wire.Record{aRec(q.Name, "104.16.1.1", 300)}
+	}))
+	cfg := baseCfg(srv.URL)
+	opts := &Options{CfDomainIsDefault: true}
+	query := buildQuery(0x33, "www.flip.example", wire.TypeA)
+
+	// First answer enters the cache under the current pool-content tag.
+	if _, err := Resolve(context.Background(), query, opts, cfg); err != nil {
+		t.Fatal(err)
+	}
+	waitHits(t, hits, 1)
+
+	// A prober uploads a default pool afterwards.
+	if err := pool.SetLearned([]string{"104.17.9.9"}, nil, 3600, "flip-probe", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	answer, err := Resolve(context.Background(), query, opts, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitHits(t, hits, 2) // the flip must miss the cache and go upstream
+	parsed, err := wire.Parse(answer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := answerIPs(parsed, wire.TypeA); !slices.Contains(got, "104.17.9.9") {
+		t.Fatalf("A = %v, want the uploaded pool address among them", got)
+	}
+
+	// Steady state: with no further flips the new answer is served from cache.
+	if _, err := Resolve(context.Background(), query, opts, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("upstream hits = %d after a no-flip repeat, want 2 (cache hit)", hits.Load())
+	}
+}
