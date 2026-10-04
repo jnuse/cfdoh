@@ -22,12 +22,36 @@ func Uninstall() error
 func Status() string
 ```
 
+数值默认与钳制区间以上方对照表为准; 新配置项同变更登记本表与 normalize 钳制, 键名与环境变量一一对应.
+
 数据所有权: 状态文件 (在用地址, 上轮摘要, 下次刷新时刻); hosts 区块内容.
 
 扩展规则:
 - 新候选源扩展 Source 类型, 拉取与过滤主流程不动.
 - 写入 hosts 的域名只来自管辖域名列表; hosts 写入路径唯一.
 - 测速结论不向任何外部方上报; 可选上报功能默认关闭, 开启后仅将测速得到的地址列表发给自己配置的服务端.
+
+## 环境变量与钳制区间 (唯一真源)
+
+加载序: 默认值 → JSON 配置文件 → CFHOST_* 环境变量 (优先). 文件路径取
+CFHOST_CONFIG, 未设时用平台默认 UserConfigDir/cfdoh/cfhost.json (显式指定且读失败报错, 默认路径不存在则忽略). 文件为 snake_case 键, 零值表示未设 (hysteresis 除外, 0 是合法显式值).
+
+| 环境变量 | 文件键 | 语义 | 默认 | 钳制/备注 |
+|---|---|---|---|---|
+| CFHOST_MANAGED_DOMAINS | managed_domains | 管辖域名 (必填 ≥ 1) | (空即报错退出) | 逗号分隔 |
+| CFHOST_SOURCES | sources | 候选源 (必填 ≥ 1) | (空即报错退出) | 分号或换行分隔; 源四形态见上 |
+| CFHOST_CONCURRENCY | concurrency | 测速并发 | 8 | 1–64 |
+| CFHOST_TIMEOUT_MS | timeout_ms | 单地址每轮超时 | 2000 | 250–10000 |
+| CFHOST_ROUNDS | rounds | 采样轮数 | 3 | 1–10 |
+| CFHOST_HYSTERESIS | hysteresis | 滞回比例 | 0.2 | 0.0–0.9 |
+| CFHOST_FAILOVER_ROUNDS | failover_rounds | 在用地址连续失效强制重选轮数 | 3 | 1–100 |
+| CFHOST_INTERVAL_MIN | interval_min | 轮询周期 (分钟整数) | 10min | 钳 1min–24h; 唯一周期通道, 无亚分钟表达 |
+| CFHOST_HOSTS_PATH | hosts_path | hosts 路径 | 系统标准路径 (Windows: System32/drivers/etc/hosts; 其余: /etc/hosts) | — |
+| CFHOST_STATE_PATH | state_path | 状态文件路径 | UserConfigDir/cfdoh/cfhost-state.json | — |
+| CFHOST_CANDIDATE_LIMIT | candidate_limit | 候选数量上限 | 256 | ≤ 0 回默认; 无上限钳 |
+| CFHOST_HTTP_VERIFY | http_verify | 测速 HTTP 端到端验证 (/cdn-cgi/trace) | false | 仅 true 为真 |
+
+钳制动作记 "clamped" 日志; 非法数值环境变量直接报错退出 (与服务端回退默认不同). 重启生效, 不做热重载.
 
 事件目录:
 - hosts_updated — hosts 区块地址变化; detail: 域名数, 在用地址.
