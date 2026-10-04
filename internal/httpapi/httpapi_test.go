@@ -1155,7 +1155,8 @@ func TestAdminSelfcheckMetaEch(t *testing.T) {
 		t.Fatalf("state after ok = %d, want seed", state)
 	}
 
-	// rotated with invalid base64: 400 and the override cleared to the seed
+	// rotated with invalid base64: 400 and the prior learned state kept
+	// (matches refer: a malformed report must not migrate state)
 	if code := post(map[string]any{"source": "meta-probe", "ok": true,
 		"metaEch": map[string]any{"state": "rotated", "echConfig": b64A}}); code != 200 {
 		t.Fatalf("rotated POST (setup) = %d, want 200", code)
@@ -1164,8 +1165,9 @@ func TestAdminSelfcheckMetaEch(t *testing.T) {
 		"metaEch": map[string]any{"state": "rotated", "echConfig": "!!not-base64!!"}}); code != 400 {
 		t.Fatalf("invalid rotated POST = %d, want 400", code)
 	}
-	if _, state := ech.MetaOverride(); state != ech.MetaSeed {
-		t.Fatalf("state after invalid rotated = %d, want seed (override cleared)", state)
+	if cfgList, state := ech.MetaOverride(); state != ech.MetaLearned || string(cfgList) != string(listA) {
+		t.Fatalf("state after invalid rotated = %d %v, want learned %v (kept, not cleared)",
+			state, cfgList, listA)
 	}
 
 	// unknown state: 400, state untouched

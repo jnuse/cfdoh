@@ -156,12 +156,22 @@ class F015MetaEchTest(unittest.TestCase):
                          "ok 后须清除学习覆盖, 回到种子配置")
 
     def test_f015_invalid_b64_rejected(self):
-        """F-015: rotated 附非法 base64 → 拒绝, 维持原态 (种子)."""
+        """F-015: rotated 附非法 base64 → 400, 保持原态 (学习覆盖不动).
+
+        区分性场景 (2026-10-04 裁决对齐 refer): 先合法 rotated 建立学习
+        覆盖, 再发坏 rotated; 坏上报只应被拒绝, 不得触发状态迁移
+        (旧实现的清除回种子行为已翻案).
+        """
+        status = self._report({"state": "rotated", "echConfig": ECH_ROTATED})
+        self.assertTrue(200 <= status < 500, "上报处理异常: %s" % status)
+        self.assertEqual(self._ech_of(0xf004), ECH_ROTATED,
+                         "前置: 合法 rotated 后注入学习钥")
         status = self._report({"state": "rotated",
                                "echConfig": "!!not-base64!!"})
+        self.assertEqual(status, 400, "非法 base64 的 rotated 须 400 拒绝")
         self.assertEqual(
-            self._ech_of(0xf004), ECH_SEED,
-            "非法 base64 的 rotated 须被拒绝, 维持种子配置")
+            self._ech_of(0xf005), ECH_ROTATED,
+            "坏上报不得迁移状态, 学习覆盖须原样保持 (对齐 refer)")
 
 
 if __name__ == "__main__":

@@ -1002,10 +1002,9 @@ type selfcheckPost struct {
 // POST (F-015): state "ok" (the effective config works), "rotated" (the
 // server's key was rejected, echConfig carries the recovered retry config)
 // or "broken" (no usable key recovered). Semantics follow the refer
-// baseline's /admin/health handler; one documented divergence: a rotated
-// report with an undecodable echConfig is rejected AND clears the override
-// back to the seed (the prober just disputed the effective key, so the old
-// override cannot be kept on trust).
+// baseline's /admin/health handler; a rotated report with an undecodable
+// echConfig is rejected with 400 and the prior state is kept (a malformed
+// report must not migrate state).
 type metaEchPost struct {
 	State     string `json:"state"`
 	EchConfig string `json:"echConfig"`
@@ -1040,9 +1039,8 @@ func applyMetaEchReport(source string, report *metaEchPost) error {
 	case "rotated":
 		learned, err := ech.Validated(report.EchConfig)
 		if err != nil {
-			ech.ClearMeta()
 			slog.Warn("event", "event", "meta_ech_report_rejected", "detail",
-				fmt.Sprintf("source=%s error=%v; override cleared to seed", source, err))
+				fmt.Sprintf("source=%s error=%v; state kept", source, err))
 			return errors.New("echConfig must be a valid base64 ECHConfigList")
 		}
 		ech.SetMeta(learned, ttl, source, reason)
