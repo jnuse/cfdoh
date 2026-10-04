@@ -679,6 +679,61 @@ func TestResolveRuleReplaceReachesClient(t *testing.T) {
 	}
 }
 
+// M7: X 分支的判定责任在 resolver 的 classify (应答地址在网段, 或
+// <域名>.cdn.cloudflare.net 探测可解析). CNAME-setup 形态 (BYOIP 地址
+// 不在公布网段) 只有探测能命中 — 原缺陷是 RewriteX 内部只看应答地址,
+// 探测结果永远到不了改写步.
+func TestResolveXDeterminedByClassify(t *testing.T) {
+	loadRanges(t)
+	run := func(t *testing.T, probeAddr string) []string {
+		t.Helper()
+		resetCache()
+		srv, _ := newFakeUpstream(t, func(q *wire.Packet) *wire.Packet {
+			resp := &wire.Packet{Header: wire.Header{ID: q.Header.ID, Flags: 0x8180}, Questions: q.Questions}
+			switch wire.CanonicalName(q.Questions[0].Name) {
+			case "x.com":
+				// upstream answer on another CDN (Fastly), outside the ranges
+				resp.Answers = append(resp.Answers, aRec(q.Questions[0].Name, "3.5.140.1", 60))
+			case "x.com.cdn.cloudflare.net":
+				if q.Questions[0].Type == wire.TypeA && probeAddr != "" {
+					resp.Answers = append(resp.Answers, aRec(q.Questions[0].Name, probeAddr, 60))
+				}
+			}
+			return resp
+		})
+		cfg := baseCfg(srv.URL)
+		cfg.XDomains = []string{"x.com"}
+		if err := pool.SetLearned([]string{"104.17.9.77"}, nil, 3600, "x-probe-test", ""); err != nil {
+			t.Fatal(err)
+		}
+		opts := &Options{CfDomainIsDefault: true}
+		answer, err := Resolve(context.Background(), buildQuery(0x45, "x.com", wire.TypeA), opts, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := wire.Parse(answer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return answerIPs(parsed, wire.TypeA)
+	}
+	t.Run("cname-setup host rewritten via probe", func(t *testing.T) {
+		got := run(t, "104.16.9.9")
+		if !slices.Contains(got, "104.17.9.77") {
+			t.Fatalf("A = %v, want the pool address (probe-verified host must rewrite)", got)
+		}
+		if slices.Contains(got, "3.5.140.1") {
+			t.Fatalf("A = %v, upstream address must not survive the rewrite", got)
+		}
+	})
+	t.Run("probe negative leaves answer untouched", func(t *testing.T) {
+		got := run(t, "")
+		if !slices.Equal(got, []string{"3.5.140.1"}) {
+			t.Fatalf("A = %v, want the untouched upstream address", got)
+		}
+	})
+}
+
 // A pool uploaded AFTER a query was cached must take effect on the next
 // same-key query, not after the answer TTL (F-004: pool flips fold into the
 // cache variant; F-007/F-028: pool updates are immediately observable).

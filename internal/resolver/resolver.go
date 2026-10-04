@@ -394,7 +394,15 @@ func applyRewriteChain(ctx context.Context, plan *fullPlan, resp *wire.Packet, c
 		note(notes, "pool: scope=%q v4=%d v6=%d", plan.pool.Scope, len(plan.pool.IPv4), len(plan.pool.IPv6))
 		resp = rewrite.RewriteAddresses(resp, ranges, plan.pool, rewriteCfg(cfg, plan.pool))
 		if domainMatch(qname, cfg.XDomains) {
-			resp = rewrite.RewriteX(resp, q, plan.pool, cfg)
+			// F-014: X 判定 = 应答地址落在网段, 或 <域名>.cdn.cloudflare.net
+			// 可解析 (CNAME setup 形态). The single classify verdict gates the
+			// rewrite here and later feeds ECH injection and flattening, so
+			// the X path can no longer diverge from the probe result.
+			if classify() {
+				resp = rewrite.RewriteX(resp, q, plan.pool, cfg)
+			} else {
+				note(notes, "x: host not served by Cloudflare, answer left untouched")
+			}
 		}
 	} else {
 		note(notes, "pool: unavailable, answering unrewritten")

@@ -9,6 +9,7 @@ package rewrite
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/jnuse/cfdoh/internal/cfrange"
@@ -83,11 +84,14 @@ func UsesCloudflare(resp *wire.Packet, ranges *cfrange.Ranges) bool {
 	return false
 }
 
-// RewriteAddresses replaces the A/AAAA records and HTTPS address hints of a
-// Cloudflare-served answer with the preferred pool (each family capped at
-// maxServePerFamily; a family without pool addresses stays verbatim). With
-// CFDropAAAA the rewritten answer loses its AAAA records. Every gate miss
-// returns the answer untouched.
+// RewriteAddresses replaces the A/AAAA records and HTTPS address hints of
+// a Cloudflare-served answer with the preferred pool (each family capped at
+// maxServePerFamily). The rewrite walks the records one by one: only
+// records whose address (or hint) falls inside the published ranges are
+// replaced or removed, so a mixed answer keeps its non-Cloudflare records
+// verbatim (对齐 refer rewriteCloudflareAddresses). With CFDropAAAA the
+// in-range AAAA records drop and every HTTPS record of the rewritten answer
+// loses its ipv6hint. Every gate miss returns the answer untouched.
 func RewriteAddresses(resp *wire.Packet, ranges *cfrange.Ranges, p *pool.Pool, cfg *config.Config) *wire.Packet {
 	if resp == nil || cfg == nil || p == nil {
 		return resp
@@ -100,22 +104,134 @@ func RewriteAddresses(resp *wire.Packet, ranges *cfrange.Ranges, p *pool.Pool, c
 	}
 	v4 := firstN(p.IPv4, maxServePerFamily)
 	v6 := firstN(p.IPv6, maxServePerFamily)
-	answers := cloneAnswers(resp)
-	answers = replaceFamily(answers, wire.TypeA, v4)
-	answers = replaceFamily(answers, wire.TypeAAAA, v6)
-	answers = rewriteHTTPSHints(answers, v4, v6)
-	if cfg.CFDropAAAA {
-		answers = dropType(answers, wire.TypeAAAA)
-	}
-	resp.Answers = answers
+	resp.Answers = rewriteInRange(cloneAnswers(resp), ranges, v4, v6, cfg.CFDropAAAA)
 	return resp
 }
 
-// RewriteX rewrites answers for the configured X (multi-CDN) domains when
-// they are currently served by Cloudflare: A records go to the pool, AAAA
-// records are dropped (X answers 403 over IPv6) and HTTPS hints follow (v4
-// replaced, v6 removed). The Cloudflare determination re-checks the current
-// published ranges itself.
+// rewriteInRange rewrites each record the published ranges actually cover:
+// an in-range A (AAAA) record expands to the whole pool once per owner
+// (TTL the owner's in-range minimum, shape from its first in-range record),
+// an in-range AAAA drops under dropAAAA, and HTTPS hints follow the same
+// per-record range test. Records outside the ranges stay verbatim — a
+// mixed answer keeps its non-Cloudflare records instead of being swapped
+// wholesale. An in-range AAAA with an empty v6 pool (and no dropAAAA) also
+// stays verbatim: an empty family never had addresses to swap in.
+func rewriteInRange(records []wire.Record, ranges *cfrange.Ranges, ipv4, ipv6 []string, dropAAAA bool) []wire.Record {
+	minTTL := make(map[string]uint32)
+	for i := range records {
+		if !recordReplaceable(&records[i], ranges, ipv4, ipv6, dropAAAA) {
+			continue
+		}
+		key := familyOwnerKey(&records[i])
+		if ttl, ok := minTTL[key]; !ok || records[i].TTL < ttl {
+			minTTL[key] = records[i].TTL
+		}
+	}
+	expanded := make(map[string]bool)
+	out := make([]wire.Record, 0, len(records))
+	for i := range records {
+		r := records[i]
+		if a, ok := r.RData.(wire.A); ok {
+			if len(ipv4) > 0 && ranges.Contains(wire.IPv4String(a.IP)) {
+				if key := familyOwnerKey(&r); !expanded[key] {
+					expanded[key] = true
+					out = append(out, expandOwner(&r, minTTL[key], ipv4, wire.TypeA)...)
+				}
+				continue
+			}
+		} else if aaaa, ok := r.RData.(wire.AAAA); ok {
+			if ranges.Contains(wire.IPv6String(aaaa.IP)) {
+				if dropAAAA {
+					continue
+				}
+				if len(ipv6) > 0 {
+					if key := familyOwnerKey(&r); !expanded[key] {
+						expanded[key] = true
+						out = append(out, expandOwner(&r, minTTL[key], ipv6, wire.TypeAAAA)...)
+					}
+					continue
+				}
+			}
+		} else if r.Type == wire.TypeHTTPS {
+			rewriteHintsInRange(&records[i], ranges, ipv4, ipv6, dropAAAA)
+			r = records[i]
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// recordReplaceable reports whether one record would be swapped for pool
+// addresses (pass 1 of rewriteInRange: the per-owner TTL minimum only
+// counts records that actually get replaced).
+func recordReplaceable(r *wire.Record, ranges *cfrange.Ranges, ipv4, ipv6 []string, dropAAAA bool) bool {
+	switch rd := r.RData.(type) {
+	case wire.A:
+		return len(ipv4) > 0 && ranges.Contains(wire.IPv4String(rd.IP))
+	case wire.AAAA:
+		return len(ipv6) > 0 && !dropAAAA && ranges.Contains(wire.IPv6String(rd.IP))
+	}
+	return false
+}
+
+// familyOwnerKey deduplicates pool expansion per address family and record
+// owner: one owner's in-range records expand to the pool exactly once,
+// where the first of them stood.
+func familyOwnerKey(r *wire.Record) string {
+	return strconv.Itoa(int(r.Type)) + "|" + wire.CanonicalName(r.Name)
+}
+
+// expandOwner builds one record per pool address from the owner's first
+// in-range record; an unparseable pool address skips that address only.
+func expandOwner(template *wire.Record, ttl uint32, addrs []string, rtype uint16) []wire.Record {
+	out := make([]wire.Record, 0, len(addrs))
+	for _, addr := range addrs {
+		rd, ok := familyRData(rtype, addr)
+		if !ok {
+			continue
+		}
+		out = append(out, wire.Record{
+			Name: template.Name, Type: rtype, Class: template.Class, TTL: ttl, RData: rd,
+		})
+	}
+	return out
+}
+
+// rewriteHintsInRange rewrites the address hints of one HTTPS record so they
+// stay in sync with the per-record rewrite above: a hint the ranges cover is
+// replaced with the pool (kept verbatim when that pool family is empty),
+// and CFDropAAAA removes the ipv6hint outright — a dropped family must not
+// keep advertising addresses through its hint.
+func rewriteHintsInRange(r *wire.Record, ranges *cfrange.Ranges, ipv4, ipv6 []string, dropAAAA bool) {
+	_, hints4, hints6, _ := wire.DescribeHTTPS(r)
+	if len(hints4) > 0 && len(ipv4) > 0 && anyInRange(hints4, ranges) {
+		if packed := packHints(ipv4, 4); packed != nil {
+			wire.UpsertSvcParam(r, wire.ParamIPv4Hint, packed)
+		}
+	}
+	if len(hints6) > 0 && (dropAAAA || anyInRange(hints6, ranges)) {
+		switch {
+		case dropAAAA:
+			removeSvcParam(r, wire.ParamIPv6Hint)
+		case len(ipv6) > 0:
+			if packed := packHints(ipv6, 16); packed != nil {
+				wire.UpsertSvcParam(r, wire.ParamIPv6Hint, packed)
+			}
+		default:
+			// in-range hint with an empty v6 pool stays verbatim: an empty
+			// family has no addresses to swap in (空池不改写, 注册分歧).
+		}
+	}
+}
+
+// RewriteX rewrites answers for the configured X (multi-CDN) domains once
+// the CALLER has determined they are currently served by Cloudflare (the
+// resolver's classification: an answer address inside the published ranges
+// or the "<name>.cdn.cloudflare.net" probe — F-014). A records go to the
+// pool, AAAA records are dropped (X answers 403 over IPv6) and HTTPS hints
+// follow (v4 replaced, v6 removed). The determination is not re-checked
+// here: one request carries one classification verdict, re-deriving it
+// locally would diverge from the probe on CNAME-setup hosts.
 func RewriteX(resp, q *wire.Packet, p *pool.Pool, cfg *config.Config) *wire.Packet {
 	if resp == nil || q == nil || len(q.Questions) == 0 || cfg == nil {
 		return resp
@@ -124,9 +240,6 @@ func RewriteX(resp, q *wire.Packet, p *pool.Pool, cfg *config.Config) *wire.Pack
 		return resp
 	}
 	if !domainMatch(q.Questions[0].Name, cfg.XDomains) {
-		return resp
-	}
-	if !UsesCloudflare(resp, cfrange.Current()) {
 		return resp
 	}
 	v4 := firstN(p.IPv4, maxServePerFamily)
@@ -147,12 +260,17 @@ func RewriteX(resp, q *wire.Packet, p *pool.Pool, cfg *config.Config) *wire.Pack
 	return resp
 }
 
-// PinAddresses pins the query-name A records of the answer to ips and drops
-// every AAAA record (pinned hosts are served IPv4-only). An AAAA query loses
-// its AAAA records even with no A records to pin — the drop is the point, not
-// a side effect of pinning (F-014: GitHub 与站点池不返回 AAAA). Records the
-// query name does not own stay untouched; without a query-name A record an
-// A query is returned verbatim. Used for the site and GitHub host pools.
+// PinAddresses pins the answer's A records to ips and drops every AAAA
+// record (pinned hosts are served IPv4-only; an AAAA query loses its AAAA
+// records even with no A records to pin — the drop is the point, F-014:
+// GitHub 与站点池不返回 AAAA). Only A and AAAA queries pin. The pinned
+// block takes the query name's own A records as its template; a CNAME-chain
+// answer without query-name A records falls back to the first A record of
+// the chain (any owner — the later Flatten step re-owns it under the query
+// name), and an answer without any A record synthesizes the pinned block
+// under the query name with TTL 60 (对齐 refer pinAddresses). Records of
+// unrelated owners ride along untouched. Used for the site and GitHub host
+// pools.
 func PinAddresses(resp, q *wire.Packet, ips []string) *wire.Packet {
 	if resp == nil || q == nil || len(q.Questions) == 0 || len(ips) == 0 {
 		return resp
@@ -162,7 +280,8 @@ func PinAddresses(resp, q *wire.Packet, ips []string) *wire.Packet {
 			return resp
 		}
 	}
-	if q.Questions[0].Type == wire.TypeAAAA {
+	qtype := q.Questions[0].Type
+	if qtype == wire.TypeAAAA {
 		answers := dropType(resp.Answers, wire.TypeAAAA)
 		if len(answers) == len(resp.Answers) {
 			return resp
@@ -170,45 +289,75 @@ func PinAddresses(resp, q *wire.Packet, ips []string) *wire.Packet {
 		resp.Answers = answers
 		return resp
 	}
-	qname := wire.CanonicalName(q.Questions[0].Name)
-	first := -1
-	ttl := uint32(0)
-	for i, r := range resp.Answers {
-		if r.Type != wire.TypeA || wire.CanonicalName(r.Name) != qname {
-			continue
-		}
-		if first < 0 {
-			first, ttl = i, r.TTL
-		} else if r.TTL < ttl {
-			ttl = r.TTL
-		}
-	}
-	if first < 0 {
+	if qtype != wire.TypeA {
 		return resp
 	}
-	template := resp.Answers[first]
-	answers := make([]wire.Record, 0, len(resp.Answers))
+	qname := wire.CanonicalName(q.Questions[0].Name)
+	qnameFirst, anyFirst := -1, -1
+	for i, r := range resp.Answers {
+		if r.Type != wire.TypeA {
+			continue
+		}
+		if anyFirst < 0 {
+			anyFirst = i
+		}
+		if qnameFirst < 0 && wire.CanonicalName(r.Name) == qname {
+			qnameFirst = i
+		}
+	}
+	// synthesize: no A record at all — the pinned block rides under the
+	// query name (TTL 60); otherwise the target owner is the query name when
+	// it owns A records, else the first A record's owner (CNAME-chain form).
+	synthesize := qnameFirst < 0 && anyFirst < 0
+	target := ""
+	template := wire.Record{}
+	ttl := uint32(60)
+	if !synthesize {
+		if qnameFirst >= 0 {
+			template = resp.Answers[qnameFirst]
+		} else {
+			template = resp.Answers[anyFirst]
+		}
+		target = wire.CanonicalName(template.Name)
+		ttl = template.TTL
+		for _, r := range resp.Answers {
+			if r.Type == wire.TypeA && wire.CanonicalName(r.Name) == target && r.TTL < ttl {
+				ttl = r.TTL
+			}
+		}
+	}
+	answers := make([]wire.Record, 0, len(resp.Answers)+len(ips))
+	pin := func() {
+		for _, ip := range ips {
+			v, err := wire.ParseIPv4(ip)
+			if err != nil {
+				continue
+			}
+			name, class := q.Questions[0].Name, wire.ClassIN
+			if !synthesize {
+				name, class = template.Name, template.Class
+			}
+			answers = append(answers, wire.Record{
+				Name: name, Type: wire.TypeA, Class: class, TTL: ttl, RData: wire.A{IP: v},
+			})
+		}
+	}
 	pinned := false
 	for _, r := range resp.Answers {
 		if r.Type == wire.TypeAAAA {
 			continue
 		}
-		if r.Type == wire.TypeA && wire.CanonicalName(r.Name) == qname {
+		if !synthesize && r.Type == wire.TypeA && wire.CanonicalName(r.Name) == target {
 			if !pinned {
-				for _, ip := range ips {
-					v, err := wire.ParseIPv4(ip)
-					if err != nil {
-						continue
-					}
-					answers = append(answers, wire.Record{
-						Name: template.Name, Type: wire.TypeA, Class: template.Class, TTL: ttl, RData: wire.A{IP: v},
-					})
-				}
+				pin()
 				pinned = true
 			}
 			continue
 		}
 		answers = append(answers, r)
+	}
+	if synthesize {
+		pin()
 	}
 	resp.Answers = answers
 	return resp
@@ -439,32 +588,6 @@ func replaceFamily(records []wire.Record, rtype uint16, addrs []string) []wire.R
 		out = append(out, r)
 	}
 	return out
-}
-
-// rewriteHTTPSHints replaces the address hints of every HTTPS record so they
-// stay in sync with the rewritten A/AAAA records; a family without pool
-// addresses keeps its hint verbatim.
-func rewriteHTTPSHints(records []wire.Record, ipv4, ipv6 []string) []wire.Record {
-	for i := range records {
-		r := &records[i]
-		if r.Type != wire.TypeHTTPS {
-			continue
-		}
-		if _, ok := r.RData.(wire.SVCB); !ok {
-			continue
-		}
-		if len(ipv4) > 0 {
-			if packed := packHints(ipv4, 4); packed != nil {
-				wire.UpsertSvcParam(r, wire.ParamIPv4Hint, packed)
-			}
-		}
-		if len(ipv6) > 0 {
-			if packed := packHints(ipv6, 16); packed != nil {
-				wire.UpsertSvcParam(r, wire.ParamIPv6Hint, packed)
-			}
-		}
-	}
-	return records
 }
 
 func dropType(records []wire.Record, rtype uint16) []wire.Record {

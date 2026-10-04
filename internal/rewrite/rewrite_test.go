@@ -368,6 +368,59 @@ func TestRewriteAddresses(t *testing.T) {
 			t.Fatalf("A = %v, want untouched", got)
 		}
 	})
+	t.Run("mixed a records rewrite only in-range", func(t *testing.T) {
+		// M9: 混合应答逐记录改写 — 仅网段内的 A 记录被池替换,
+		// 非 CF 记录原样保留 (对齐 refer).
+		cfg := &config.Config{CFRewriteEnabled: true}
+		original := &wire.Packet{
+			Questions: []wire.Question{{Name: "www.example.com", Type: wire.TypeA, Class: wire.ClassIN}},
+			Answers: []wire.Record{
+				aRec("www.example.com", "104.16.1.1", 60),
+				aRec("www.example.com", "93.184.216.34", 240),
+			},
+		}
+		resp := RewriteAddresses(original, ranges, poolBoth, cfg)
+		want := append(slices.Clone(poolBoth.IPv4), "93.184.216.34")
+		if got := answerIPs(resp, wire.TypeA); !slices.Equal(got, want) {
+			t.Fatalf("A = %v, want %v (non-CF record verbatim)", got, want)
+		}
+		for _, r := range resp.Answers {
+			if r.Type == wire.TypeA && wire.IPv4String(r.RData.(wire.A).IP) == "93.184.216.34" {
+				if r.TTL != 240 {
+					t.Fatalf("non-CF record TTL = %d, want untouched 240", r.TTL)
+				}
+			}
+		}
+	})
+	t.Run("drop aaaa spares out-of-range records and hints", func(t *testing.T) {
+		// M9+L7: DropAAAA 仅删网段内 AAAA 与 ipv6hint; 非 CF 的 AAAA 与
+		// 非 CF 的 v4 hint 原样保留.
+		cfg := &config.Config{CFRewriteEnabled: true, CFDropAAAA: true}
+		original := &wire.Packet{
+			Questions: []wire.Question{{Name: "www.example.com", Type: wire.TypeAAAA, Class: wire.ClassIN}},
+			Answers: []wire.Record{
+				aaaaRec("www.example.com", "2606:4700:4700::1111", 90), // in range → dropped
+				aaaaRec("www.example.com", "2001:db8::1", 120),          // outside → kept
+				httpsRec("www.example.com", []string{"93.184.216.34"}, []string{"2001:db8::2"}, 60),
+			},
+		}
+		resp := RewriteAddresses(original, ranges, poolBoth, cfg)
+		if got := answerIPs(resp, wire.TypeAAAA); !slices.Equal(got, []string{v6("2001:db8::1")}) {
+			t.Fatalf("AAAA = %v, want only the out-of-range record", got)
+		}
+		for i := range resp.Answers {
+			if resp.Answers[i].Type != wire.TypeHTTPS {
+				continue
+			}
+			_, hints4, hints6, _ := wire.DescribeHTTPS(&resp.Answers[i])
+			if !slices.Equal(hints4, []string{"93.184.216.34"}) {
+				t.Fatalf("non-CF ipv4hint = %v, want verbatim", hints4)
+			}
+			if len(hints6) != 0 {
+				t.Fatalf("ipv6hint = %v, want removed under CFDropAAAA", hints6)
+			}
+		}
+	})
 	t.Run("cf drop aaaa removes aaaa", func(t *testing.T) {
 		cfg := &config.Config{CFRewriteEnabled: true, CFDropAAAA: true}
 		resp := RewriteAddresses(cfAnswer(), ranges, poolBoth, cfg)
@@ -376,6 +429,15 @@ func TestRewriteAddresses(t *testing.T) {
 		}
 		if got := answerIPs(resp, wire.TypeA); !slices.Equal(got, poolBoth.IPv4) {
 			t.Fatalf("A = %v, want %v", got, poolBoth.IPv4)
+		}
+		for i := range resp.Answers {
+			if resp.Answers[i].Type != wire.TypeHTTPS {
+				continue
+			}
+			// L7: AAAA 已删, ipv6hint 须同步移除, 否则双栈客户端仍被引到 v6
+			if _, _, ipv6, _ := wire.DescribeHTTPS(&resp.Answers[i]); len(ipv6) != 0 {
+				t.Fatalf("ipv6hint = %v, want removed under CFDropAAAA", ipv6)
+			}
 		}
 	})
 	t.Run("v4-only pool keeps v6 verbatim", func(t *testing.T) {
@@ -446,12 +508,15 @@ func TestRewriteX(t *testing.T) {
 			t.Fatalf("A = %v, want untouched", got)
 		}
 	})
-	t.Run("not on cloudflare untouched", func(t *testing.T) {
+	t.Run("out-of-range answer still rewrites (the determination is the caller's)", func(t *testing.T) {
+		// M7 改判: RewriteX 不再内部复判网段 — CNAME-setup 形态 (BYOIP 地址
+		// 不在公布网段) 由 resolver 的 classify (cdn.cloudflare.net 探测) 门控;
+		// 此处钉住新契约: 判定责任在调用方, 函数只认域名与池.
 		q := query("x.com", wire.TypeA)
 		resp := &wire.Packet{Questions: q.Questions, Answers: []wire.Record{aRec("x.com", "3.5.140.1", 60)}}
 		out := RewriteX(resp, q, p, cfg)
-		if got := answerIPs(out, wire.TypeA); !slices.Equal(got, []string{"3.5.140.1"}) {
-			t.Fatalf("A = %v, want untouched", got)
+		if got := answerIPs(out, wire.TypeA); !slices.Equal(got, p.IPv4) {
+			t.Fatalf("A = %v, want %v", got, p.IPv4)
 		}
 	})
 	t.Run("empty pool untouched", func(t *testing.T) {
@@ -507,14 +572,63 @@ func TestPinAddresses(t *testing.T) {
 			t.Fatalf("chain-owned A record dropped")
 		}
 	})
-	t.Run("no query-name a record untouched", func(t *testing.T) {
+	t.Run("cname chain pins via the first a record", func(t *testing.T) {
+		// M8 改判: 无 qname-owned A 时回退用首条 A 记录 (任意 owner) 作模板;
+		// 原地替换链上目标 owner 的 A 记录, 后续 Flatten 归名.
+		q := query("site.example.com", wire.TypeA)
+		resp := &wire.Packet{Questions: q.Questions, Answers: []wire.Record{
+			cnameRec("site.example.com", "edge.example.net", 300),
+			aRec("edge.example.net", "1.2.3.4", 60),
+			aRec("edge.example.net", "5.6.7.8", 30),
+		}}
+		out := PinAddresses(resp, q, ips)
+		if out.Answers[0].Type != wire.TypeCNAME {
+			t.Fatalf("leading CNAME = %+v, want preserved", out.Answers[0])
+		}
+		got := answerIPs(out, wire.TypeA)
+		if !slices.Equal(got, ips) {
+			t.Fatalf("A = %v, want pinned %v (chain addresses replaced)", got, ips)
+		}
+		for _, r := range out.Answers[1:] {
+			if r.Type != wire.TypeA {
+				continue
+			}
+			if wire.CanonicalName(r.Name) != "edge.example.net" {
+				t.Fatalf("pinned owner = %q, want the chain owner", r.Name)
+			}
+			if r.TTL != 30 {
+				t.Fatalf("pinned TTL = %d, want owner minimum 30", r.TTL)
+			}
+		}
+	})
+	t.Run("no a record at all synthesizes under the query name", func(t *testing.T) {
+		// M8 改判 (原 "no query-name a record untouched" 钉的是缺陷行为):
+		// 应答无任何 A 记录时在 qname 下补造钉住块 (TTL 60, 对齐 refer).
 		q := query("site.example.com", wire.TypeA)
 		resp := &wire.Packet{Questions: q.Questions, Answers: []wire.Record{
 			cnameRec("site.example.com", "edge.example.net", 60),
 		}}
 		out := PinAddresses(resp, q, ips)
-		if len(out.Answers) != 1 || out.Answers[0].Type != wire.TypeCNAME {
-			t.Fatalf("answers = %v, want untouched CNAME", out.Answers)
+		if out.Answers[0].Type != wire.TypeCNAME {
+			t.Fatalf("leading CNAME = %+v, want preserved", out.Answers[0])
+		}
+		if got := answerIPs(out, wire.TypeA); !slices.Equal(got, ips) {
+			t.Fatalf("A = %v, want synthesized %v", got, ips)
+		}
+		for _, r := range out.Answers[1:] {
+			if r.Type != wire.TypeA || r.TTL != 60 || wire.CanonicalName(r.Name) != "site.example.com" {
+				t.Fatalf("synthesized record = %+v, want qname A TTL 60", r)
+			}
+		}
+	})
+	t.Run("https query does not pin or synthesize a records", func(t *testing.T) {
+		// 只有 A/AAAA 查询钉 A 记录: HTTPS 查询不得补造 A 记录
+		// (hint 由 PinHTTPSHints 单独负责, 对齐 refer 调用门控).
+		q := query("site.example.com", wire.TypeHTTPS)
+		resp := &wire.Packet{Questions: q.Questions, Answers: []wire.Record{httpsRec("site.example.com", []string{"104.16.1.1"}, nil, 60)}}
+		out := PinAddresses(resp, q, ips)
+		if len(out.Answers) != 1 || out.Answers[0].Type != wire.TypeHTTPS {
+			t.Fatalf("answers = %v, want untouched HTTPS", out.Answers)
 		}
 	})
 	t.Run("empty ips untouched", func(t *testing.T) {

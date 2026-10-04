@@ -20,11 +20,11 @@
 
 ## 批 3: 改写链 (M7, M8, M9, L7)
 
-- [ ] M7: X 分支用 classify() 门控, RewriteX 去内部复判; CNAME setup X 单测
-- [ ] M8: PinAddresses 无 qname-A 回退首条 A 模板 + 无 A 补造; 改判 "no query-name a record untouched"
-- [ ] M9: replaceFamily/DropAAAA 逐记录网段过滤; 混合应答单测; rewrite.md 补登记
-- [ ] L7: DropAAAA 同步移除 ipv6hint
-- [ ] 批末验证: go 三连 -race + acceptance f009/f014/f010 模块
+- [x] M7: X 分支用 classify() 门控, RewriteX 去内部复判; CNAME setup X 单测
+- [x] M8: PinAddresses 无 qname-A 回退首条 A 模板 + 无 A 补造; 改判 "no query-name a record untouched" (连带改判: rewrite_test.go 两处单测钉旧缺陷改判 — TestRewriteX/not_on_cloudflare → out-of-range still rewrites; TestPinAddresses/no_query-name_a_record → synthesizes under the query name)
+- [x] M9: replaceFamily/DropAAAA 逐记录网段过滤; 混合应答单测; rewrite.md 补登记 (rewriteHTTPSHints 删除, 逐记录改写取代)
+- [x] L7: DropAAAA 同步移除 ipv6hint
+- [x] 批末验证: go 三连 -race + acceptance f009/f014/f010 模块
 
 ## 批 4: cfhost 侧 (M11, L11-L15, I9)
 
@@ -51,7 +51,7 @@
 - [ ] L9: PATH_ALIASES 查重跳过
 - [ ] L10: 配置文件行上限 4MiB
 - [ ] I1: qtype 错型永不匹配 (修齐 refer)
-- [ ] I2/I3/I4/I5/I6/I7/I8: 各 spec 登记落位
+- [ ] I2/I3/I4/I5/I6/I7/I8: 各 spec 登记落位 (I7 措辞覆盖两族: "空池族的原记录与地址提示均原样保留", 批 3 复核提醒)
 - [ ] 批末全量: go 三连 -race + acceptance 127 例全绿 + 与修复冲突用例登记齐
 
 ## 验证命令
