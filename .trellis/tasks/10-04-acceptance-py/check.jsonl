@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/prd/requirements.md", "reason": "逐条核对测试断言与 F 节验收标准一致, 语义不弱化不发明"}
+{"file": ".trellis/tasks/10-04-acceptance-py/prd.md", "reason": "本任务验收清单: 零第三方 import, 映射审计 F-001..F-030, go 三连不受影响, live 不进 CI"}
+{"file": ".trellis/spec/arch/httpapi.md", "reason": "复核 DoH 校验状态码矩阵与 admin 鉴权矩阵断言来源"}
+{"file": ".trellis/spec/arch/server-entry.md", "reason": "复核生命周期断言 (信号次序, 快照集合)"}

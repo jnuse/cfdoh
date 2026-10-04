@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/prd/requirements.md", "reason": "全部 30 条 F 的行为规则与验收标准, 断言语义的唯一 oracle; 逐节物化为测试"}
+{"file": ".trellis/spec/arch/httpapi.md", "reason": "路由表, DoH 请求校验 (406/415/413/400/405), admin 双令牌矩阵, 客户端识别头顺序, 对外接口签名"}
+{"file": ".trellis/spec/arch/resolver.md", "reason": "缓存策略 (fresh/refresh/stale/SERVFAIL), 改写链次序, explain 管线; F-004/F-012/F-018 断言依据"}
+{"file": ".trellis/spec/arch/server-entry.md", "reason": "信号处理次序 (停收→快照→退), 快照文件集合与派生路径; F-021 生命周期断言依据"}
+{"file": ".trellis/spec/arch/upstream.md", "reason": "对冲与应答校验链; F-003 出向断言 (hedge, 单飞, 失败回退) 依据"}
+{"file": ".trellis/spec/arch/config.md", "reason": "环境变量命名, 默认值与钳制区间; harness 环境注入与 F-022 断言依据"}
+{"file": ".trellis/spec/arch/cfhost.md", "reason": "客户端配置项, hosts 区块标记与原子写, 测速滞回; F-023 至 F-027 断言依据"}
+{"file": ".trellis/spec/arch/client-entry.md", "reason": "cfhost 子命令集与退出语义; F-026/F-027 进程级断言依据"}
+{"file": ".trellis/spec/arch/build-release.md", "reason": "交付物清单与 workflow 结构; F-029/F-030 静态断言依据"}
+{"file": ".trellis/spec/arch/hubfeed.md", "reason": "公开池拉取与整池校验语义; F-028 受控 cfhub 断言依据"}
