@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/10-04-review-fixes/prd.md", "reason": "验收标准: H1/H2 回归, 11 medium 全修有钉, low/info 方向落实, 双门禁绿"}
+{"file": ".trellis/tasks/10-04-review-fixes/design.md", "reason": "逐条修法与 spec 落点, 核对实现与方案一致"}
+{"file": ".trellis/spec/prd/requirements.md", "reason": "修复后行为不得违反 F 节验收标准; L4 登记落位核对"}
+{"file": ".trellis/spec/arch/wire.md", "reason": "核对 M10 豁免登记文本与调用面 (仅上游四面)"}
+{"file": ".trellis/spec/arch/pool.md", "reason": "核对 M4 登记 (强于 refer 理由) 与 M2 上限登记"}
+{"file": ".trellis/spec/arch/rewrite.md", "reason": "核对 M7/M8/M9 语义句与 I7 边界登记"}
+{"file": ".trellis/spec/arch/cfhost.md", "reason": "核对批 4 cfhost 修复与表/说明一致"}

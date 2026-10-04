@@ -1,0 +1,12 @@
+{"file": ".trellis/tasks/10-04-review-fixes/prd.md", "reason": "37 条修复的统一 ID 清单与方向, 裁决三条, 验收标准"}
+{"file": ".trellis/tasks/10-04-review-fixes/design.md", "reason": "每条修法方向与 spec 落点; 测试策略与批次"}
+{"file": ".trellis/tasks/10-04-review-fixes/review/A-wire-ecs-rules.md", "reason": "A 组细节: 代码位置, 失败模式, refer 对照 (M10, L2, L3, L4, I1-I3)"}
+{"file": ".trellis/tasks/10-04-review-fixes/review/B-upstream-cache-cfrange-isp.md", "reason": "B 组细节: M5, M6, L1"}
+{"file": ".trellis/tasks/10-04-review-fixes/review/C-pool-hubfeed-h3-ech.md", "reason": "C 组细节: M1, M2, M3, M4, L5, I4, I5"}
+{"file": ".trellis/tasks/10-04-review-fixes/review/D-rewrite-resolver.md", "reason": "D 组细节: M7, M8, M9, L6, L7, I6, I7"}
+{"file": ".trellis/tasks/10-04-review-fixes/review/E-httpapi-config-server.md", "reason": "E 组细节: H1, L8, L9, L10, I8"}
+{"file": ".trellis/tasks/10-04-review-fixes/review/F-cfhost-client.md", "reason": "F 组细节: H2, M11, L11-L15, I9"}
+{"file": ".trellis/spec/prd/requirements.md", "reason": "行为级真源; L4 需在 F-004 补登记; 修复不得违反各 F 节验收标准"}
+{"file": ".trellis/spec/arch/wire.md", "reason": "M10 豁免登记落点; L2/L3 语义归属"}
+{"file": ".trellis/spec/arch/pool.md", "reason": "M4 限段登记落点; M1/M2/L5 涉及的接口契约"}
+{"file": ".trellis/spec/arch/rewrite.md", "reason": "M7/M8/M9/L7/I7 语义与登记落点"}
