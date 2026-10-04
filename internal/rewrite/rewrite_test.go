@@ -400,7 +400,7 @@ func TestRewriteAddresses(t *testing.T) {
 			Questions: []wire.Question{{Name: "www.example.com", Type: wire.TypeAAAA, Class: wire.ClassIN}},
 			Answers: []wire.Record{
 				aaaaRec("www.example.com", "2606:4700:4700::1111", 90), // in range → dropped
-				aaaaRec("www.example.com", "2001:db8::1", 120),          // outside → kept
+				aaaaRec("www.example.com", "2001:db8::1", 120),         // outside → kept
 				httpsRec("www.example.com", []string{"93.184.216.34"}, []string{"2001:db8::2"}, 60),
 			},
 		}

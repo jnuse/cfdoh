@@ -1,14 +1,14 @@
 # cfhost
 
 业务逻辑:
-- 主循环一轮: 拉取候选 (多源合并去重, 仅公网单播; 源含公开池 API, 优选域名, 静态列表) → 本地测速 (对 443 端口 TCP+TLS 握手计时, SNI 用管辖域名之一, 多轮取中位, 失败淘汰, 可选 HTTP 端到端验证) → 滞回判定 → hosts 区块更新.
-- 候选源四形态语法: `pool:<url>[#<isp>]` (公开池 API, 只取 published 且 isp 匹配, 缺省 national), `domain:<域名>` (系统 DNS 解析 A), `list:<ip,...>` (静态), 其余 `https://...` (通用远程 API, 每行一个 IP 的文本或 JSON 字符串数组).
-- 状态文件默认路径 os.UserConfigDir()/cfdoh/cfhost-state.json, 领域含在用 v4/v6, 上轮摘要, 下次刷新时刻, 连续失败计数与上轮候选; 单实例锁文件 cfhost.lock (含 PID, 活实例拒绝, 死实例覆盖) 同目录, 仅常驻模式持有.
+- 主循环一轮: 拉取候选 (多源合并去重, 仅公网单播; 源含公开池 API, 优选域名, 静态列表) → 本地测速 (对 443 端口 TCP+TLS 握手计时, SNI 用管辖域名之一, 多轮取中位, 失败淘汰, 可选 HTTP 端到端验证) → 滞回判定 → hosts 区块更新. next_run 缺失或过期 (如状态落盘失败) 时按配置周期兜底休眠, 轮询不坍缩为连续重试.
+- 候选源四形态语法: `pool:<url>[#<isp>]` (公开池 API, 只取 published 且 isp 匹配, 缺省 national), `domain:<域名>` (系统 DNS 解析 A), `list:<ip,...>` (静态), 其余 `https://...` (通用远程 API, 每行一个 IP 的文本或 JSON 字符串数组). 远程源仅接受 https 且走系统证书校验; 重定向仅限 https 目标 (含 10 跳上限), 降级跳转拒绝跟随.
+- 状态文件默认路径 os.UserConfigDir()/cfdoh/cfhost-state.json, 领域含在用 v4/v6, 上轮摘要, 下次刷新时刻, 连续失败计数与上轮候选; 单实例锁文件 cfhost.lock (含 PID, O_EXCL 原子创建, 并发启动仅一实例持锁; 活实例拒绝, 死实例覆盖) 同目录, 仅常驻模式持有.
 - 测速全部失败时保留 hosts 现状不动.
-- hosts 区块带标记 (# BEGIN cfhost 至 # END cfhost), 区块外逐字节保留; 原子更新; 最优地址未变化不重写; 更新后刷新系统 DNS 缓存.
+- hosts 区块带标记 (# BEGIN cfhost 至 # END cfhost), 区块外逐字节保留; 原子更新; 最优地址未变化不重写; 更新后刷新系统 DNS 缓存. hosts 读取的瞬时错误 (如安全软件短暂锁定) 记告警并按本轮跳过: 不写 hosts, 在用地址与失败计数保持不变, 下周期重试, 守护不退出.
 - 单实例锁, 重复启动退出.
-- Windows 服务化 (install/uninstall/start/stop) 与状态查询 (status); run-once 单轮执行.
-- 状态文件记录在用地址与上轮测速摘要; 日志带轮转.
+- Windows 服务化 (install/uninstall/start/stop) 与状态查询 (status); run-once 单轮执行. status 在配置加载失败时仍按 CFHOST_STATE_PATH 或默认路径渲染状态, 不因配置缺失整体失败.
+- 状态文件记录在用地址与上轮测速摘要; 日志带轮转 (超 1MiB 切至 .1 单代, 启动时与每次写入时检查, 长驻进程不重启也轮转).
 
 对外接口:
 
@@ -41,7 +41,7 @@ exe 路径不可得时回退 UserConfigDir/cfdoh/cfhost.json). 状态文件, 单
 
 | 环境变量 | 文件键 | 语义 | 默认 | 钳制/备注 |
 |---|---|---|---|---|
-| CFHOST_MANAGED_DOMAINS | managed_domains | 管辖域名 (必填 ≥ 1) | (空即报错退出) | 逗号分隔 |
+| CFHOST_MANAGED_DOMAINS | managed_domains | 管辖域名 (必填 ≥ 1) | (空即报错退出) | 逗号分隔; 每项去首尾空白与尾点后按规范形存储 |
 | CFHOST_SOURCES | sources | 候选源 (必填 ≥ 1) | (空即报错退出) | 分号或换行分隔; 源四形态见上 |
 | CFHOST_CONCURRENCY | concurrency | 测速并发 | 8 | 1–64 |
 | CFHOST_TIMEOUT_MS | timeout_ms | 单地址每轮超时 | 2000 | 250–10000 |

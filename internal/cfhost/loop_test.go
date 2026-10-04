@@ -13,17 +13,17 @@ import (
 func TestDecideHysteresis(t *testing.T) {
 	const ms = time.Millisecond
 	cases := []struct {
-		name         string
-		hasCur       bool
-		curOK        bool
-		curStreak    int
-		failover     int
-		curMedian    time.Duration
-		newMedian    time.Duration
-		hysteresis   float64
-		wantKeep     bool
-		wantStreak   int
-		wantForced   bool
+		name       string
+		hasCur     bool
+		curOK      bool
+		curStreak  int
+		failover   int
+		curMedian  time.Duration
+		newMedian  time.Duration
+		hysteresis float64
+		wantKeep   bool
+		wantStreak int
+		wantForced bool
 	}{
 		{"no current adopts new", false, false, 0, 3, 0, 100 * ms, 0.2, false, 0, false},
 		{"5 percent gain keeps current", true, true, 0, 3, 100 * ms, 95 * ms, 0.2, true, 0, false},
@@ -44,6 +44,25 @@ func TestDecideHysteresis(t *testing.T) {
 					keep, streak, forced, c.wantKeep, c.wantStreak, c.wantForced)
 			}
 		})
+	}
+}
+
+func TestNextDelayFallsBackToInterval(t *testing.T) {
+	// Missing (zero) or stale next_run — e.g. when the state file could not
+	// be saved — must fall back to a full interval instead of collapsing
+	// the loop into a busy spin.
+	interval := 10 * time.Minute
+	if got := nextDelay(clientState{NextRun: 0}, interval); got != interval {
+		t.Fatalf("zero next_run should sleep a full interval, got %v", got)
+	}
+	past := time.Now().Add(-time.Hour).Unix()
+	if got := nextDelay(clientState{NextRun: past}, interval); got != interval {
+		t.Fatalf("stale next_run should sleep a full interval, got %v", got)
+	}
+	future := time.Now().Add(90 * time.Second).Unix()
+	got := nextDelay(clientState{NextRun: future}, interval)
+	if got <= 0 || got > 90*time.Second {
+		t.Fatalf("future next_run should sleep until it, got %v", got)
 	}
 }
 

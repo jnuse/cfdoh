@@ -28,14 +28,14 @@
 
 ## 批 4: cfhost 侧 (M11, L11-L15, I9)
 
-- [ ] M11: 域名 trim/去尾点写回存储
-- [ ] L11: 锁 O_EXCL 原子创建
-- [ ] L12: status 配置失败单独读 CFHOST_STATE_PATH
-- [ ] L13: 日志轮转写入路径触发
-- [ ] L14: delay<=0 兜底休眠 Interval
-- [ ] L15: hosts 读瞬时错误本轮跳过不终止
-- [ ] I9: fetcher 拒绝降级重定向
-- [ ] 批末验证: go 三连 -race + acceptance f023-f027 模块
+- [x] M11: 域名 trim/去尾点写回存储
+- [x] L11: 锁 O_EXCL 原子创建
+- [x] L12: status 配置失败单独读 CFHOST_STATE_PATH
+- [x] L13: 日志轮转写入路径触发
+- [x] L14: delay<=0 兜底休眠 Interval
+- [x] L15: hosts 读瞬时错误本轮跳过不终止
+- [x] I9: fetcher 拒绝降级重定向
+- [x] 批末验证: go 三连 -race + acceptance f023-f027 模块 (11 例)
 
 ## 批 5: 剩余 low + 裁决与登记 (M4, M10, L1-L6, L8-L10, I1-I8)
 

@@ -3,6 +3,7 @@ package cfhost
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,6 +31,20 @@ const (
 	fetchLimitByte = 2 << 20 // 2MiB response cap per source
 )
 
+// refuseDowngradeRedirect is the http.Client redirect policy for remote
+// sources: https-to-https redirects are followed (bounded like the default
+// client at 10 hops), but any redirect that would leave https — e.g. a
+// downgraded http target — is refused so fetching never moves off TLS.
+func refuseDowngradeRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("refusing redirect to non-https %s", req.URL)
+	}
+	return nil
+}
+
 // fetcher bundles the injectable dependencies of candidate fetching.
 type fetcher struct {
 	client   *http.Client
@@ -37,7 +52,7 @@ type fetcher struct {
 }
 
 var defaultFetcher = &fetcher{
-	client:   &http.Client{Timeout: fetchTimeout},
+	client:   &http.Client{Timeout: fetchTimeout, CheckRedirect: refuseDowngradeRedirect},
 	resolver: net.DefaultResolver,
 }
 

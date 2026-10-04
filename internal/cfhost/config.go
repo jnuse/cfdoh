@@ -113,6 +113,27 @@ func (fc *fileConfig) applyTo(cfg *Config) {
 	}
 }
 
+// configPath resolves the config file location: CFHOST_CONFIG when set,
+// otherwise cfhost.json next to the executable (portable layout). The
+// second return reports whether CFHOST_CONFIG was explicitly set.
+func configPath() (path string, explicit bool) {
+	if p := strings.TrimSpace(os.Getenv("CFHOST_CONFIG")); p != "" {
+		return p, true
+	}
+	return defaultConfigPath(), false
+}
+
+// resolveStatePath resolves the state file location without a fully valid
+// config: CFHOST_STATE_PATH when set, otherwise the default next to the
+// config file. Used by Status when config loading fails.
+func resolveStatePath() string {
+	if p := strings.TrimSpace(os.Getenv("CFHOST_STATE_PATH")); p != "" {
+		return p
+	}
+	path, _ := configPath()
+	return defaultStatePath(path)
+}
+
 // LoadConfig loads the client configuration: defaults, then the JSON file
 // (CFHOST_CONFIG or the platform default path), then environment variables
 // (CFHOST_*). Environment wins over the file. The default state path
@@ -120,11 +141,7 @@ func (fc *fileConfig) applyTo(cfg *Config) {
 // the config lives (portable layout: binary and its runtime files in one
 // folder).
 func LoadConfig() (*Config, error) {
-	path := strings.TrimSpace(os.Getenv("CFHOST_CONFIG"))
-	explicit := path != ""
-	if !explicit {
-		path = defaultConfigPath()
-	}
+	path, explicit := configPath()
 	cfg := &Config{
 		Concurrency:    defaultConcurrency,
 		Timeout:        defaultTimeoutMs,
@@ -233,11 +250,14 @@ func (cfg *Config) normalize() error {
 	if len(cfg.ManagedDomains) < 1 {
 		return fmt.Errorf("cfhost: managed_domains is required (at least one domain)")
 	}
-	for _, d := range cfg.ManagedDomains {
-		d = strings.TrimSpace(d)
+	for i, d := range cfg.ManagedDomains {
+		// Store the normalized form (trimmed, no trailing dot): consumers
+		// (probe SNI, hosts rendering) must never see the raw input.
+		d = strings.TrimSuffix(strings.TrimSpace(d), ".")
 		if !validDomain(d) {
 			return fmt.Errorf("cfhost: invalid managed domain %q", d)
 		}
+		cfg.ManagedDomains[i] = d
 	}
 	if len(cfg.Sources) < 1 {
 		return fmt.Errorf("cfhost: sources is required (at least one source)")

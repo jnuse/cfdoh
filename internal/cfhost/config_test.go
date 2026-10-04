@@ -198,6 +198,32 @@ func TestLoadConfigClamps(t *testing.T) {
 	}
 }
 
+func TestLoadConfigNormalizesManagedDomains(t *testing.T) {
+	clearEnv(t)
+	// Whitespace and trailing dots come from the JSON file path (the env
+	// path already trims via splitCSV); stored values must be the normalized
+	// form so probe SNI and hosts rendering never see raw input.
+	cfgFile := writeConfigFile(t,
+		`{"managed_domains":[" a.example.com ","b.example.com.","c.example.com"],"sources":["list:1.1.1.1"]}`)
+	t.Setenv("CFHOST_CONFIG", cfgFile)
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if strings.Join(cfg.ManagedDomains, "|") != "a.example.com|b.example.com|c.example.com" {
+		t.Fatalf("managed domains not normalized on store: %q", cfg.ManagedDomains)
+	}
+
+	// A domain that is nothing but whitespace and a dot is still invalid.
+	clearEnv(t)
+	cfgFile = writeConfigFile(t,
+		`{"managed_domains":[" . "],"sources":["list:1.1.1.1"]}`)
+	t.Setenv("CFHOST_CONFIG", cfgFile)
+	if _, err := LoadConfig(); err == nil {
+		t.Fatal("dot-only domain must still be rejected")
+	}
+}
+
 func TestValidDomain(t *testing.T) {
 	cases := []struct {
 		in   string

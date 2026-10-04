@@ -2,6 +2,7 @@ package cfhost
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -72,15 +73,24 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 	if keepV4 {
 		newV4 = curV4
 	}
-	st.FailStreak = streak
 
 	// --- v6 hysteresis (no fail-streak; v6 loss keeps the old entry) ---
 	newV6, hasV6 := decideV6(st.CurrentV6, byAddr, v6top, cfg.Hysteresis)
 
 	written, err := updateHosts(cfg.HostsPath, cfg.ManagedDomains, newV4, newV6, hasV6)
 	if err != nil {
+		if errors.Is(err, errHostsSkipped) {
+			// Transient hosts read failure: keep hosts, the current addresses
+			// and the fail streak as-is; the scheduled next run persists so
+			// the daemon stays alive and retries next cycle.
+			if serr := saveState(cfg.StatePath, st); serr != nil {
+				slog.Warn("cfhost: state save failed", "error", serr.Error())
+			}
+			return nil
+		}
 		return fmt.Errorf("cfhost: hosts update: %w", err)
 	}
+	st.FailStreak = streak
 	st.CurrentV4 = newV4.String()
 	st.CurrentV6 = ""
 	if hasV6 {
@@ -128,11 +138,7 @@ func loopWithLock(ctx context.Context, cfg *Config) error {
 			return err
 		}
 		st, _ := loadState(cfg.StatePath)
-		delay := time.Until(time.Unix(st.NextRun, 0))
-		if delay <= 0 {
-			continue
-		}
-		timer := time.NewTimer(delay)
+		timer := time.NewTimer(nextDelay(st, cfg.Interval))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -140,6 +146,16 @@ func loopWithLock(ctx context.Context, cfg *Config) error {
 		case <-timer.C:
 		}
 	}
+}
+
+// nextDelay returns how long the loop sleeps before the next pass. A
+// missing or stale next_run (e.g. the state file could not be saved) falls
+// back to a full interval so the loop never collapses into a busy spin.
+func nextDelay(st clientState, interval time.Duration) time.Duration {
+	if delay := time.Until(time.Unix(st.NextRun, 0)); delay > 0 {
+		return delay
+	}
+	return interval
 }
 
 // decideHysteresis decides whether to keep the current v4 address:

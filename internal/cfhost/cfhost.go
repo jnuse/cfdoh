@@ -41,13 +41,18 @@ func Stop() error { return servicePlatform().stop() }
 
 // Status renders the current state: addresses in use, last sweep summary,
 // next refresh time and lock status. Returns "no state" when no state file
-// exists yet.
+// exists yet. A failed config load must not sink this read-only query: the
+// state path falls back to CFHOST_STATE_PATH or the default location.
 func Status() string {
 	cfg, err := LoadConfig()
-	if err != nil {
-		return "no state"
+	var statePath string
+	if err == nil {
+		statePath = cfg.StatePath
+	} else {
+		slog.Warn("cfhost: config load failed, falling back to default state path", "error", err.Error())
+		statePath = resolveStatePath()
 	}
-	st, found := loadState(cfg.StatePath)
+	st, found := loadState(statePath)
 	if !found {
 		return "no state"
 	}
@@ -60,7 +65,7 @@ func Status() string {
 	} else {
 		fmt.Fprintf(&b, "next run: unknown\n")
 	}
-	if pid := readLockPID(cfg.StatePath); pid > 0 {
+	if pid := readLockPID(statePath); pid > 0 {
 		fmt.Fprintf(&b, "lock: held by pid %d\n", pid)
 	} else {
 		fmt.Fprintf(&b, "lock: free\n")
@@ -82,34 +87,97 @@ func stateDirOf(statePath string) string {
 }
 
 // Logging: slog writes to stderr and to cfhost.log next to the state file.
-// The log rotates to .1 (one generation kept) past 1MiB. A file open failure
-// falls back to stderr only.
+// The log rotates to .1 (one generation kept) past 1MiB, checked both at
+// startup and on every write, so long-running daemons rotate without a
+// restart. A file open failure falls back to stderr only.
 
 var loggingOnce sync.Once
+
+// logRotateSize is the size past which cfhost.log rotates to cfhost.log.1.
+const logRotateSize = 1 << 20
 
 func initLogging(stateDir string) {
 	loggingOnce.Do(func() {
 		w := io.Writer(os.Stderr)
-		if f, err := openLogWithRotate(stateDir); err != nil {
+		if rw, err := openRotatingLog(stateDir); err != nil {
 			slog.Warn("cfhost: file logging unavailable", "error", err.Error())
 		} else {
-			w = io.MultiWriter(os.Stderr, f)
+			w = io.MultiWriter(os.Stderr, rw)
 		}
 		slog.SetDefault(slog.New(slog.NewTextHandler(w, nil)))
 	})
 }
 
-func openLogWithRotate(stateDir string) (*os.File, error) {
+// openRotatingLog prepares the rotating log file in stateDir, rotating an
+// already oversized file first.
+func openRotatingLog(stateDir string) (*rotatingWriter, error) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, err
 	}
 	path := filepath.Join(stateDir, "cfhost.log")
-	const rotateSize = 1 << 20
-	if st, err := os.Stat(path); err == nil && st.Size() > rotateSize {
+	if st, err := os.Stat(path); err == nil && st.Size() > logRotateSize {
 		os.Remove(path + ".1")
 		if err := os.Rename(path, path+".1"); err != nil {
 			return nil, err
 		}
 	}
-	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	return newRotatingWriter(path)
+}
+
+// rotatingWriter wraps the log file and rotates it to .1 (one generation
+// kept) once it grows past logRotateSize, so rotation keeps working for the
+// lifetime of the process instead of only at startup.
+type rotatingWriter struct {
+	mu   sync.Mutex
+	path string
+	f    *os.File
+	size int64
+}
+
+func newRotatingWriter(path string) (*rotatingWriter, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	size := int64(0)
+	if st, err := f.Stat(); err == nil {
+		size = st.Size()
+	}
+	return &rotatingWriter{path: path, f: f, size: size}, nil
+}
+
+func (w *rotatingWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.f == nil {
+		return 0, os.ErrClosed
+	}
+	if w.size+int64(len(p)) > logRotateSize {
+		w.rotateLocked()
+		if w.f == nil {
+			return 0, os.ErrClosed
+		}
+	}
+	n, err := w.f.Write(p)
+	w.size += int64(n)
+	return n, err
+}
+
+// rotateLocked renames the current log to .1 and reopens a fresh file. It
+// must be called with w.mu held and never logs (the log path runs through
+// this writer; logging here would deadlock).
+func (w *rotatingWriter) rotateLocked() {
+	w.f.Close()
+	os.Remove(w.path + ".1")
+	os.Rename(w.path, w.path+".1")
+	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		w.f = nil
+		return
+	}
+	w.f = f
+	w.size = 0
+	if st, err := f.Stat(); err == nil {
+		w.size = st.Size()
+	}
 }

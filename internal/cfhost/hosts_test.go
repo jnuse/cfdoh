@@ -2,6 +2,7 @@ package cfhost
 
 import (
 	"bytes"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -141,6 +142,24 @@ func TestUpdateHostsMissingFile(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if !bytes.Equal(data, renderBlock(td, v4, netip.Addr{}, false)) {
 		t.Fatalf("created file wrong:\n%q", data)
+	}
+}
+
+func TestUpdateHostsTransientReadErrorSkips(t *testing.T) {
+	// Reading a path we cannot open (a directory yields EISDIR, not
+	// ErrNotExist) must produce the skip signal, not a fatal error: the
+	// daemon survives transient hosts read failures (e.g. antivirus locks).
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hosts-as-dir")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	written, err := updateHosts(path, td, v4, netip.Addr{}, false)
+	if !errors.Is(err, errHostsSkipped) {
+		t.Fatalf("expected skip signal, got %v", err)
+	}
+	if written {
+		t.Fatal("skip must not write anything")
 	}
 }
 

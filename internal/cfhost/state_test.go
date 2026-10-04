@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 )
 
@@ -88,6 +89,39 @@ func TestLockOverwritesDeadAndCorrupt(t *testing.T) {
 		t.Fatalf("corrupt lock must be overwritten: %v", err)
 	}
 	release()
+}
+
+func TestLockConcurrentStartSingleWinner(t *testing.T) {
+	// O_EXCL creation must let exactly one of many simultaneous starters win
+	// the lock; the rest fail (previously check-then-write let all win).
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	const n = 8
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	releases := make([]func(), n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			releases[i], errs[i] = acquireLock(statePath)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	winners := 0
+	for i := 0; i < n; i++ {
+		if errs[i] == nil {
+			winners++
+			releases[i]()
+		} else if releases[i] != nil {
+			releases[i]()
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("exactly one lock winner expected, got %d", winners)
+	}
 }
 
 func TestReadLockPID(t *testing.T) {

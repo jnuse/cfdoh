@@ -6,16 +6,19 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
 
 // insecureFetcher trusts the httptest self-signed certificate (scheme stays
-// https so the source validation path is exercised end to end).
+// https so the source validation path is exercised end to end) and keeps the
+// production redirect policy.
 func insecureFetcher() *fetcher {
 	return &fetcher{
 		client: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:       10 * time.Second,
+			CheckRedirect: refuseDowngradeRedirect,
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 			},
@@ -185,10 +188,10 @@ func TestFetchCandidatesMergeFilterDedupLimit(t *testing.T) {
 func TestFetchCandidatesToleratesFailingSources(t *testing.T) {
 	pool := tlsServer(t, `[{"published":true,"isp":"national","ipv4":["1.1.1.1"]}]`, 0)
 	sources := []string{
-		"pool:" + pool.URL,                          // good
-		"list:not-an-ip,alsonotip",                  // parses but zero valid -> failed
-		"https://127.0.0.1:1/ips",                   // connection refused -> failed
-		"garbage-source",                            // unparsable -> failed
+		"pool:" + pool.URL,                           // good
+		"list:not-an-ip,alsonotip",                   // parses but zero valid -> failed
+		"https://127.0.0.1:1/ips",                    // connection refused -> failed
+		"garbage-source",                             // unparsable -> failed
 		"pool:http://insecure.invalid/feed#national", // http rejected
 	}
 	cands, allFailed := fetchCandidates(context.Background(), sources, insecureFetcher(), 0)
@@ -200,10 +203,59 @@ func TestFetchCandidatesToleratesFailingSources(t *testing.T) {
 	}
 }
 
+func TestFetcherRefusesDowngradeRedirect(t *testing.T) {
+	// An https source redirecting to a plain-http target must be refused:
+	// fetching never moves off TLS (PRD F-023 https-only sources).
+	downgradedHit := false
+	downgraded := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		downgradedHit = true
+		w.Write([]byte("1.1.1.1"))
+	}))
+	defer downgraded.Close()
+	entry := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, downgraded.URL+"/ips", http.StatusFound)
+	}))
+	defer entry.Close()
+
+	_, err := fetchFromAPI(context.Background(), insecureFetcher(), entry.URL)
+	if err == nil {
+		t.Fatal("https-to-http redirect must be refused")
+	}
+	if !strings.Contains(err.Error(), "non-https") {
+		t.Fatalf("error should name the refused non-https target: %v", err)
+	}
+	if downgradedHit {
+		t.Fatal("the downgraded http target must never be fetched")
+	}
+
+	// Same policy on the pool source.
+	_, err = fetchFromPool(context.Background(), insecureFetcher(), entry.URL, "")
+	if err == nil || !strings.Contains(err.Error(), "non-https") {
+		t.Fatalf("pool source downgrade must be refused too: %v", err)
+	}
+}
+
+func TestFetcherFollowsHTTPSRedirect(t *testing.T) {
+	// https-to-https redirects are still followed.
+	target := tlsServer(t, "1.1.1.1\n", 0)
+	entry := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/ips", http.StatusFound)
+	}))
+	defer entry.Close()
+
+	got, err := fetchFromAPI(context.Background(), insecureFetcher(), entry.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].String() != "1.1.1.1" {
+		t.Fatalf("https redirect should be followed, got %v", got)
+	}
+}
+
 func TestFetchCandidatesAllFailed(t *testing.T) {
 	sources := []string{
-		"list:127.0.0.1,10.1.2.3",   // valid parse, all filtered -> failed
-		"https://127.0.0.1:1/ips",   // refused
+		"list:127.0.0.1,10.1.2.3", // valid parse, all filtered -> failed
+		"https://127.0.0.1:1/ips", // refused
 	}
 	cands, allFailed := fetchCandidates(context.Background(), sources, insecureFetcher(), 0)
 	if !allFailed || len(cands) != 0 {

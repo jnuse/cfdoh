@@ -24,6 +24,10 @@ const (
 	hostsEnd   = "# END cfhost"
 )
 
+// errHostsSkipped signals a transient hosts read failure: this round skips
+// the hosts update (nothing is written) instead of failing the daemon.
+var errHostsSkipped = errors.New("cfhost: hosts read failed, update skipped")
+
 // renderBlock builds the managed block: one line per domain for IPv4, then
 // one line per domain for IPv6 when available.
 func renderBlock(domains []string, v4, v6 netip.Addr, hasV6 bool) []byte {
@@ -98,7 +102,10 @@ func spliceBlock(data, block []byte) ([]byte, bool) {
 func updateHosts(path string, domains []string, v4, v6 netip.Addr, hasV6 bool) (bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return false, fmt.Errorf("read hosts: %w", err)
+		// Transient read failure (e.g. antivirus briefly locking hosts on
+		// Windows): skip this round; the daemon retries next cycle.
+		slog.Warn("cfhost: hosts read failed, skipping hosts update this round", "error", err.Error())
+		return false, errHostsSkipped
 	}
 	content, changed := spliceBlock(data, renderBlock(domains, v4, v6, hasV6))
 	if !changed {
