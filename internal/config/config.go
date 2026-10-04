@@ -157,7 +157,15 @@ func Load() (*Config, error) {
 		return out
 	}
 	cfg.Upstreams = httpsOnly(src.strList("UPSTREAMS", defaultUpstreams))
-	cfg.EcsUpstreams = httpsOnly(src.strList("ECS_UPSTREAMS", defaultUpstreams))
+	// ECS_UPSTREAMS unset (or empty) follows the resolved UPSTREAMS —
+	// config.md "同 UPSTREAMS" — so subnet-bearing queries never leak to
+	// the built-in default upstreams behind an operator-configured relay
+	// set. An explicitly set value keeps its own (fail-fast) semantics.
+	if raw, ok := src.lookup("ECS_UPSTREAMS"); !ok || strings.TrimSpace(raw) == "" {
+		cfg.EcsUpstreams = cfg.Upstreams
+	} else {
+		cfg.EcsUpstreams = httpsOnly(src.strList("ECS_UPSTREAMS", ""))
+	}
 	cfg.UpstreamTimeoutMs = src.intClamp("UPSTREAM_TIMEOUT_MS", 2500, 250, 15000)
 	cfg.UpstreamHedgeMs = src.intClamp("UPSTREAM_HEDGE_MS", 100, 0, 5000)
 	cfg.CacheMinTTL = src.intClamp("CACHE_MIN_TTL", 30, 0, 3600)

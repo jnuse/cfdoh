@@ -74,6 +74,42 @@ func TestParseTableRejectsEmpty(t *testing.T) {
 	}
 }
 
+// An IPv4-mapped CIDR like ::ffff:1.2.3.0/120 parses, but unmapping it
+// yields an invalid prefix whose interval computation widens to the whole
+// v6 space; one such (poisoned) line must be skipped instead of capturing
+// every otherwise-uncovered v6 client (B1/M5).
+func TestParseTableSkipsMappedCidr(t *testing.T) {
+	withTable(t, strings.Join([]string{
+		"evil ::ffff:1.2.3.0/120",
+		"telecom 2606:4700::/32",
+		"chinanet 1.2.0.0/16",
+	}, "\n"))
+
+	mu.Lock()
+	names := append([]string(nil), current.names...)
+	mu.Unlock()
+	if len(names) != 2 {
+		t.Fatalf("names = %v, want the mapped line skipped entirely", names)
+	}
+
+	cases := []struct{ ip, want string }{
+		{"2606:4700::1", "telecom"}, // real entries still work
+		{"2606:4701::1", ""},        // uncovered v6 falls back to national, not "evil"
+		{"2001:db8::1", ""},
+		{"1.2.0.1", "chinanet"},
+	}
+	for _, tc := range cases {
+		addr, err := netip.ParseAddr(tc.ip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr = addr.Unmap()
+		if got := lookup(current, addr); got != tc.want {
+			t.Fatalf("lookup(%s) = %q, want %q", tc.ip, got, tc.want)
+		}
+	}
+}
+
 func TestLookupNestedMostSpecific(t *testing.T) {
 	withTable(t, strings.Join([]string{
 		"chinanet 1.2.0.0/16",

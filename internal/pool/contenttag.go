@@ -97,16 +97,22 @@ func snapshotContentLocked() (string, int64) {
 	return strconv.FormatUint(h.Sum64(), 16), horizon
 }
 
-// appendLearnedLocked folds one learned table (insertion order kept: it
-// feeds CombineRankings and is part of the effective behavior); the caller
-// holds mu.
+// appendLearnedLocked folds one learned table. Keys are sorted so the
+// hash is independent of write and map iteration order: a periodic
+// multi-scope refresh rewrites identical content through a randomly
+// iterated map (hubfeed) and re-setting each key moves it in the table's
+// insertion list — identical content must keep the tag either way. The
+// insertion order still governs capacity eviction; the caller holds mu.
 func appendLearnedLocked(b *strings.Builder, horizon *int64, current int64, kind rune, t *poolTable) {
-	for el := t.order.Front(); el != nil; el = el.Next() {
-		key := el.Value.(string)
-		pool := t.entries[key]
-		if pool.expiresAt <= current {
-			continue
+	keys := make([]string, 0, len(t.entries))
+	for key, pool := range t.entries {
+		if pool.expiresAt > current {
+			keys = append(keys, key)
 		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		pool := t.entries[key]
 		fmt.Fprintf(b, "%c|%q|%s|%s\n", kind, key, strings.Join(pool.ipv4, ","), strings.Join(pool.ipv6, ","))
 		*horizon = min(*horizon, pool.expiresAt)
 	}

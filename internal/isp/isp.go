@@ -210,7 +210,14 @@ func parseTable(text string) (*table, error) {
 		if err != nil || prefix.Addr().Zone() != "" {
 			continue
 		}
-		prefix = netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()).Masked()
+		prefix = netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits())
+		if !prefix.IsValid() {
+			// e.g. ::ffff:1.2.3.0/120: unmaps to a 4-byte address with v6
+			// bits — an invalid prefix that would otherwise widen to a
+			// whole-space interval and poison one address family's table
+			continue
+		}
+		prefix = prefix.Masked()
 		start := prefix.Addr()
 		end := lastAddress(prefix)
 		id, ok := index[name]

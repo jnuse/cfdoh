@@ -1,6 +1,9 @@
 package ech
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +14,7 @@ import (
 func stateTestReset() {
 	mu.Lock()
 	publish = make(map[string]*cachedConfig)
+	publishOrder = nil
 	meta = nil
 	metaGen = 0
 	mu.Unlock()
@@ -179,5 +183,48 @@ func TestEchStateMissingFile(t *testing.T) {
 	}
 	if Status() != nil {
 		t.Error("state must stay empty without a snapshot")
+	}
+}
+
+// A snapshot holding more publish entries than the cap must load capped:
+// LoadState goes through the same insertion-order eviction as live
+// caching (C2/M2).
+func TestEchStateLoadCapsPublishCache(t *testing.T) {
+	stateTestReset()
+	stateTestFreezeClock(t, 1_000_000)
+
+	encoded := base64.StdEncoding.EncodeToString(stateTestConfig())
+	file := snapshotFile{
+		Version: snapshotVersion,
+		Publish: make(map[string]snapshotPublish, publishMaxEntries+50),
+	}
+	for i := 0; i < publishMaxEntries+50; i++ {
+		file.Publish[fmt.Sprintf("d%d.example", i)] = snapshotPublish{
+			Config: encoded, ExpiresAt: 1_000_000 + 3_600_000,
+		}
+	}
+	data, err := json.Marshal(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "ech-state.json")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := LoadState(path); err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	mu.Lock()
+	size, orderLen := len(publish), len(publishOrder)
+	for _, key := range publishOrder {
+		if _, ok := publish[key]; !ok {
+			mu.Unlock()
+			t.Fatalf("order slot %q missing from the cache", key)
+		}
+	}
+	mu.Unlock()
+	if size != publishMaxEntries || orderLen != publishMaxEntries {
+		t.Fatalf("publish = %d entries / %d order slots, want the cap %d", size, orderLen, publishMaxEntries)
 	}
 }

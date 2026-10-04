@@ -58,6 +58,37 @@ func TestContentTagFlipsOnPoolMutation(t *testing.T) {
 	}
 }
 
+// The hub feed rewrites every adopted scope each cycle by iterating a
+// map, so the write order of identical per-scope content varies per
+// refresh; the tag must depend on content only, never on that order
+// (C1/M1).
+func TestContentTagStableAcrossScopeRewriteOrder(t *testing.T) {
+	resetPool(t, 1_000_000)
+	content := map[string]string{"isp:chinanet": "104.17.9.1", "isp:unicom": "104.17.9.2"}
+	write := func(order ...string) {
+		for _, scope := range order {
+			if err := SetLearned([]string{content[scope]}, nil, 1800, "pool-feed", scope); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	write("isp:chinanet", "isp:unicom")
+	first := ContentTag()
+
+	// periodic refresh of identical content in the opposite write order
+	write("isp:unicom", "isp:chinanet")
+	if got := ContentTag(); got != first {
+		t.Fatalf("identical content rewritten in a different scope order changed the tag: %s -> %s", first, got)
+	}
+
+	// and from a clean table the write order alone must not set the tag
+	resetPool(t, 1_000_000)
+	write("isp:unicom", "isp:chinanet")
+	if got := ContentTag(); got != first {
+		t.Fatalf("tag depends on write order: %s -> %s", first, got)
+	}
+}
+
 func TestContentTagStableAcrossStateReload(t *testing.T) {
 	resetPool(t, 1_000_000)
 	if err := SetLearned([]string{"104.17.9.1"}, nil, 3600, "probe-a", ""); err != nil {

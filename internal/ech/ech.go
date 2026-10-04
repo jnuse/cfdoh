@@ -26,6 +26,12 @@ const (
 	minEchBytes = 6
 	maxEchBytes = 16384
 	configTTL   = time.Hour
+
+	// publishMaxEntries caps the published-domain resolution cache. The
+	// ?ech= parameter accepts any syntactically valid domain, so without a
+	// hard cap unauthenticated unique-domain queries would grow the cache
+	// without bound; eviction is oldest-inserted first.
+	publishMaxEntries = 256
 )
 
 // now is the clock hook for tests (unix milliseconds).
@@ -64,12 +70,38 @@ type cachedConfig struct {
 }
 
 var (
-	mu      sync.Mutex
-	publish = make(map[string]*cachedConfig) // published-domain resolution cache
-
-	meta    *metaOverride
-	metaGen int
+	mu           sync.Mutex
+	publish      = make(map[string]*cachedConfig) // published-domain resolution cache
+	publishOrder []string                         // publish keys in insertion order, oldest first
+	meta         *metaOverride
+	metaGen      int
 )
+
+// storePublishLocked caches one resolution, keeping the insertion order
+// used for capacity eviction; refreshing an existing key counts as a new
+// insertion. The caller holds mu.
+func storePublishLocked(key string, cached *cachedConfig) {
+	removePublishLocked(key)
+	publish[key] = cached
+	publishOrder = append(publishOrder, key)
+	for len(publishOrder) > publishMaxEntries {
+		oldest := publishOrder[0]
+		publishOrder = publishOrder[1:]
+		delete(publish, oldest)
+	}
+}
+
+// removePublishLocked drops one cache entry and its order slot. The
+// caller holds mu.
+func removePublishLocked(key string) {
+	delete(publish, key)
+	for i, k := range publishOrder {
+		if k == key {
+			publishOrder = append(publishOrder[:i], publishOrder[i+1:]...)
+			break
+		}
+	}
+}
 
 // ConfigFor returns the ECHConfigList published in the HTTPS records of
 // sourceDomain, cached for one hour. Failures return an error; the caller
@@ -83,7 +115,7 @@ func ConfigFor(ctx context.Context, sourceDomain string, cfg *config.Config) ([]
 			mu.Unlock()
 			return data, nil
 		}
-		delete(publish, key)
+		removePublishLocked(key)
 	}
 	mu.Unlock()
 
@@ -113,7 +145,7 @@ func ConfigFor(ctx context.Context, sourceDomain string, cfg *config.Config) ([]
 			continue
 		}
 		mu.Lock()
-		publish[key] = &cachedConfig{data: echBytes, expiresAt: now() + configTTL.Milliseconds()}
+		storePublishLocked(key, &cachedConfig{data: echBytes, expiresAt: now() + configTTL.Milliseconds()})
 		mu.Unlock()
 		return echBytes, nil
 	}
@@ -234,6 +266,12 @@ func Status() *StatusReport {
 	}
 	mu.Lock()
 	defer mu.Unlock()
+	// re-check under the lock: MetaOverride released it between the two
+	// critical sections, and a concurrent report (ok branch → ClearMeta)
+	// may have dropped the override inside that window
+	if meta == nil {
+		return nil
+	}
 	report := &StatusReport{
 		Bytes:  len(meta.config),
 		Until:  meta.until,

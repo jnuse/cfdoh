@@ -3,8 +3,10 @@ package ech
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -19,6 +21,7 @@ func resetEch(t *testing.T, base int64) {
 	t.Helper()
 	mu.Lock()
 	publish = make(map[string]*cachedConfig)
+	publishOrder = nil
 	meta = nil
 	metaGen = 0
 	mu.Unlock()
@@ -107,6 +110,75 @@ func TestConfigForRejectsInvalidEch(t *testing.T) {
 	if _, err := ConfigFor(context.Background(), "cloudflare-ech.com", cfg); err == nil {
 		t.Fatal("invalid ECHConfigList must be rejected")
 	}
+}
+
+// The ?ech= parameter accepts any syntactically valid domain, so the
+// publish cache needs a hard cap: unbounded unique-domain queries would
+// otherwise grow it without bound (C2/M2). Eviction is oldest-inserted
+// first and a refresh counts as a new insertion.
+func TestPublishCacheCapEvictsOldest(t *testing.T) {
+	resetEch(t, 1_000_000)
+	fresh := func() *cachedConfig { return &cachedConfig{data: validList, expiresAt: 1_000_000 + 60_000} }
+	for i := 0; i < publishMaxEntries; i++ {
+		storePublishLocked(fmt.Sprintf("d%d.example", i), fresh())
+	}
+	if len(publish) != publishMaxEntries || len(publishOrder) != publishMaxEntries {
+		t.Fatalf("publish = %d entries / %d order slots", len(publish), len(publishOrder))
+	}
+
+	// one more unique domain evicts the oldest entry, not the newest
+	storePublishLocked("new.example", fresh())
+	if len(publish) != publishMaxEntries {
+		t.Fatalf("publish size = %d, want cap %d", len(publish), publishMaxEntries)
+	}
+	if _, ok := publish["d0.example"]; ok {
+		t.Fatal("the oldest entry must be evicted")
+	}
+	if _, ok := publish["new.example"]; !ok {
+		t.Fatal("the newest entry must survive")
+	}
+
+	// a refreshed key counts as a new insertion and survives later inserts
+	storePublishLocked("d1.example", fresh())
+	for i := 2; i < 20; i++ {
+		storePublishLocked(fmt.Sprintf("x%d.example", i), fresh())
+	}
+	if _, ok := publish["d1.example"]; !ok {
+		t.Fatal("a refreshed key must not be evicted by later inserts")
+	}
+	if _, ok := publish["d2.example"]; ok {
+		t.Fatal("stale keys must keep being evicted oldest-first")
+	}
+	if len(publish) != len(publishOrder) {
+		t.Fatalf("map and order diverged: %d vs %d", len(publish), len(publishOrder))
+	}
+}
+
+// Status takes two lock windows (MetaOverride, then its own); a concurrent
+// report clearing the override in between used to nil-deref inside the
+// second window (C3/M3).
+func TestStatusSurvivesConcurrentClearMeta(t *testing.T) {
+	resetEch(t, 1_000_000)
+	SetMeta(validList, 3600, "probe-a", "rotated")
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 4000; j++ {
+				Status()
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for j := 0; j < 2000; j++ {
+			ClearMeta()
+			SetMeta(validList, 3600, "probe-a", "rotated")
+		}
+	}()
+	wg.Wait()
 }
 
 func TestMetaStateMachAndGeneration(t *testing.T) {

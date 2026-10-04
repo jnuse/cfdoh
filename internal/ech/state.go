@@ -86,6 +86,7 @@ func LoadState(path string) error {
 	mu.Lock()
 	defer mu.Unlock()
 	publish = make(map[string]*cachedConfig)
+	publishOrder = nil
 	for domain, entry := range file.Publish {
 		if domain == "" || entry.ExpiresAt <= current {
 			continue
@@ -94,7 +95,7 @@ func LoadState(path string) error {
 		if err != nil || !validEchBytes(decoded) {
 			continue // defensive: snapshots only ever contain valid lists
 		}
-		publish[domain] = &cachedConfig{data: decoded, expiresAt: entry.ExpiresAt}
+		storePublishLocked(domain, &cachedConfig{data: decoded, expiresAt: entry.ExpiresAt})
 	}
 	meta = nil
 	if m := file.Meta; m != nil && m.Until > current {

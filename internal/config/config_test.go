@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -61,6 +62,52 @@ func TestClamping(t *testing.T) {
 	cfg := loadClean(t)
 	// t.Setenv before loadClean's Unsetenv... loadClean unsets! Re-do without clean.
 	_ = cfg
+}
+
+func TestEcsUpstreamsFollowsUpstreams(t *testing.T) {
+	// unset (or empty) ECS_UPSTREAMS follows the resolved UPSTREAMS so
+	// subnet-bearing queries stay on the operator's own relay set instead
+	// of leaking to the built-in default triple (B2/M6)
+	os.Unsetenv("UPSTREAMS")
+	os.Unsetenv("ECS_UPSTREAMS")
+	relay := "https://relay.example/dns-query,https://relay2.example/dns-query"
+	t.Setenv("UPSTREAMS", relay)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(cfg.EcsUpstreams, ",") != relay {
+		t.Fatalf("EcsUpstreams must follow Upstreams when ECS_UPSTREAMS is unset: %v", cfg.EcsUpstreams)
+	}
+	for _, u := range cfg.EcsUpstreams {
+		if strings.Contains(u, "cloudflare-dns.com") || strings.Contains(u, "dns.google") || strings.Contains(u, "quad9") {
+			t.Fatalf("subnet-bearing queries must not leak to the built-in defaults: %v", cfg.EcsUpstreams)
+		}
+	}
+
+	// both unset: the built-in triple, unchanged default behavior
+	os.Unsetenv("UPSTREAMS")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(cfg.EcsUpstreams, ",") != strings.Join(cfg.Upstreams, ",") {
+		t.Fatalf("both unset must yield the same list: %v vs %v", cfg.EcsUpstreams, cfg.Upstreams)
+	}
+	if len(cfg.EcsUpstreams) != 3 {
+		t.Fatalf("default triple = %v", cfg.EcsUpstreams)
+	}
+
+	// an explicitly set ECS_UPSTREAMS keeps its own fail-fast semantics
+	t.Setenv("UPSTREAMS", relay)
+	t.Setenv("ECS_UPSTREAMS", "https://ecs-relay.example/dns-query")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(cfg.EcsUpstreams, ",") != "https://ecs-relay.example/dns-query" {
+		t.Fatalf("explicit ECS_UPSTREAMS must win: %v", cfg.EcsUpstreams)
+	}
 }
 
 func TestClampingDirect(t *testing.T) {

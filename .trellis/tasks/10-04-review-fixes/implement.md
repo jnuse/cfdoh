@@ -11,12 +11,12 @@
 
 ## 批 2: 服务端稳态与安全 (M1, M2, M3, M5, M6)
 
-- [ ] M1: appendLearnedLocked 键排序; 多 scope 同内容重写标签不变单测
-- [ ] M2: publish 表容量上限 256 插入序淘汰; ech.md 登记上限
-- [ ] M3: Status 取锁后复查 meta nil
-- [ ] M5: isp mapped CIDR IsValid 校验跳过; 污染行单测
-- [ ] M6: EcsUpstreams 默认回退 Upstreams; 自配上游不泄露单测
-- [ ] 批末验证: go 三连 -race + acceptance f013 (ECS 出向)/f028 模块
+- [x] M1: appendLearnedLocked 键排序; 多 scope 同内容重写标签不变单测
+- [x] M2: publish 表容量上限 256 插入序淘汰; ech.md 登记上限
+- [x] M3: Status 取锁后复查 meta nil
+- [x] M5: isp mapped CIDR IsValid 校验跳过; 污染行单测
+- [x] M6: EcsUpstreams 默认回退 Upstreams; 自配上游不泄露单测
+- [x] 批末验证: go 三连 -race + acceptance f013 (ECS 出向)/f028 模块
 
 ## 批 3: 改写链 (M7, M8, M9, L7)
 
