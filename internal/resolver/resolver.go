@@ -166,12 +166,19 @@ func resolveFresh(ctx context.Context, query []byte, opts *Options, cfg *config.
 	}
 	note(notes, "upstream: winner %s", hostOf(res.Upstream))
 
+	applyRewriteChain(ctx, plan, resp, rewriteCfg(cfg, plan.pool), notes)
 	if store {
-		if _, ok := sharedCache(cfg).Put(plan.id, res.Packet, cfg); !ok {
-			note(notes, "cache: answer not stored (SERVFAIL or zero TTL)")
+		// The baseline (refer resolveAndStore) caches the post-rewrite wire:
+		// the identity already folds the pool scope/variant, so a hit must
+		// serve the rewritten form, not the raw upstream packet.
+		if encoded, encErr := resp.Encode(); encErr == nil {
+			if _, ok := sharedCache(cfg).Put(plan.id, encoded, cfg); !ok {
+				note(notes, "cache: answer not stored (SERVFAIL or zero TTL)")
+			}
+		} else {
+			note(notes, "cache: answer not stored (encode failed: %v)", encErr)
 		}
 	}
-	applyRewriteChain(ctx, plan, resp, rewriteCfg(cfg, plan.pool), notes)
 	return &Result{Packet: finalizeAnswer(query, resp), Upstream: res.Upstream}, nil
 }
 
