@@ -18,11 +18,13 @@ curl http://127.0.0.1:8787/health        # {"ok":true}
 
 浏览器/系统 DoH 指向 `https://<你的域名>/dns-query` (前置 nginx/caddy 终止 TLS, 样例见 `deploy/nginx.sample.conf`; 直连 TLS 模式配 `TLS_CERT_FILE`/`TLS_KEY_FILE`).
 
-冒烟自测脚本 (起服务 + `/health`, `/dns-query` GET/POST, `/explain`, 快照与重启恢复):
+真实上游冒烟 (起服务 + `/health`, `/dns-query` GET/POST, `/explain`, 快照与重启恢复):
 
 ```bash
-./scripts/e2e.sh   # 外网经代理时: E2E_HTTPS_PROXY=http://host:port ./scripts/e2e.sh
+python3 -m unittest discover -s test/live -v   # 外网经代理时: E2E_HTTPS_PROXY=http://host:port
 ```
+
+发布前人工清单见 `test/live/MANUAL.md`.
 
 ## 快速开始 (cfhost 安装, Windows)
 

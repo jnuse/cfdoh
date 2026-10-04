@@ -55,12 +55,12 @@
 
 ## 批 6: 交付静态验收 + live 层 + CI (F-029, F-030)
 
-- [ ] F-029/F-030 静态断言: 文件清单, compose healthcheck/非 root/卷, release matrix/sha256/GHCR
-- [ ] test/live/: 吸收 e2e.sh 全场景 (三类型查询, explain, probe, admin 矩阵, 快照, 重启), E2E_HTTPS_PROXY 注入
-- [ ] 删除 scripts/e2e.sh
-- [ ] test/live/MANUAL.md: S 系列 (cfdoh 浏览器用户) + C 系列 (cfhost 客户端用户) 手动清单
-- [ ] ci.yml 追加 acceptance 步
-- [ ] 全量验证: discover acceptance 全绿 + go 三连全绿 + live 手动跑通
+- [x] F-029/F-030 静态断言: 文件清单, compose healthcheck/非 root/卷, release matrix/sha256/GHCR
+- [x] test/live/: 吸收 e2e.sh 全场景 (三类型查询, explain, probe, admin 矩阵, 快照, 重启), E2E_HTTPS_PROXY 注入
+- [x] 删除 scripts/e2e.sh
+- [x] test/live/MANUAL.md: S 系列 (cfdoh 浏览器用户) + C 系列 (cfhost 客户端用户) 手动清单
+- [x] ci.yml 追加 acceptance 步
+- [x] 全量验证: discover acceptance 全绿 + go 三连全绿 + live 手动跑通
 
 ## 验证命令
 

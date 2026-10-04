@@ -4,6 +4,7 @@ services:
   cfdoh:
     image: ghcr.io/jnuse/cfdoh:latest
     container_name: cfdoh
+    user: cfdoh
     restart: unless-stopped
     ports:
       - "8787:8787"

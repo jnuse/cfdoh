@@ -5,12 +5,14 @@
   及已知成因 (残留 cfdoh) 与对策
 - PF3 fixtures 证书存在且未过期 (notAfter); 过期提示重跑 make-certs.sh
 - PF4 启动后: 日志无 "address already in use" 且进程存活
-- PF5/PF6 (仅 live 层, 批 6 接线): 代理探测骨架
+- PF5/PF6 (仅 live 层): 代理探测与经代理真实 DoH 预检
 """
 
 import os
 import re
 import socket
+import ssl
+import struct
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -216,7 +218,7 @@ def check_alive_after_start(proc, name, log_text):
         _fail(problems)
 
 
-# ---------------------------------------------------------------- PF5/PF6 (live 骨架)
+# ---------------------------------------------------------------- PF5/PF6 (live)
 
 def default_proxy_url(timeout=2.0):
     """live 哨兵辅助: E2E_HTTPS_PROXY 优先; 未设时取默认路由网关的 10808.
@@ -260,31 +262,115 @@ def probe_live_proxy():
     return url
 
 
-def probe_live_doh(proxy_url, timeout=3.0):
-    """PF6 骨架: 经代理预检一次真实 DoH (cloudflare 1.1.1.1).
+def _recv_n(raw, n):
+    """读满 n 字节 (SOCKS5 定长应答段, 半包安全)."""
+    data = b""
+    while len(data) < n:
+        chunk = raw.recv(n - len(data))
+        if not chunk:
+            raise OSError("代理提前断开")
+        data += chunk
+    return data
 
-    支持 http:// 代理 (CONNECT 隧道); socks5:// 接线属于批 6 live 层.
-    失败时输出排查清单: 代理开否 / 局域网允许否 / 规则模式覆盖否.
+
+def _http_connect_tunnel(raw, host, port, timeout):
+    """http 代理 CONNECT 隧道; 读完整响应头, 非 200 抛错."""
+    raw.settimeout(timeout)
+    raw.sendall(("CONNECT %s:%d HTTP/1.1\r\nHost: %s:%d\r\n\r\n"
+                % (host, port, host, port)).encode("ascii"))
+    data = b""
+    while b"\r\n\r\n" not in data:
+        chunk = raw.recv(1024)
+        if not chunk:
+            raise OSError("代理在 CONNECT 阶段断开")
+        data += chunk
+        if len(data) > 8192:
+            raise OSError("CONNECT 响应头超长")
+    status_line = data.split(b"\r\n", 1)[0]
+    if b" 200 " not in status_line:
+        raise OSError("CONNECT 被拒: %r" % status_line)
+
+
+def _socks5_tunnel(raw, host, port, timeout):
+    """socks5 无认证隧道 (宿主 mixed 端口双协议之一)."""
+    raw.settimeout(timeout)
+    raw.sendall(b"\x05\x01\x00")                # greeting: no-auth
+    if _recv_n(raw, 2) != b"\x05\x00":
+        raise OSError("socks5 无认证握手被拒")
+    raw.sendall(b"\x05\x01\x00\x01" + socket.inet_aton(host)
+                + struct.pack(">H", port))
+    head = _recv_n(raw, 4)                      # VER REP RSV ATYP
+    if head[1] != 0:
+        raise OSError("socks5 CONNECT 被拒 (rep=%d)" % head[1])
+    # BND.ADDR/PORT 不使用, 但必须读完, 否则残留在缓冲区污染隧道字节流
+    if head[3] == 1:
+        rest = _recv_n(raw, 4 + 2)
+    elif head[3] == 3:
+        rest = _recv_n(raw, _recv_n(raw, 1)[0] + 2)
+    elif head[3] == 4:
+        rest = _recv_n(raw, 16 + 2)
+    else:
+        raise OSError("socks5 应答 ATYP 非法: %d" % head[3])
+    del rest
+
+
+def probe_live_doh(proxy_url, timeout=3.0):
+    """PF6: 经代理预检一次真实 DoH (cloudflare 1.1.1.1, design.md live 层).
+
+    http:// 代理走 CONNECT 隧道, socks5:// 走无认证 SOCKS5 (宿主 mixed
+    端口双协议, 已知事实); 隧道建立后完成 TLS 握手与一次 DoH GET,
+    应答 2xx 即通过. 失败输出排查清单: 代理开否 / 局域网允许否 /
+    规则模式覆盖否 / 系统根证书完整否.
     """
     from urllib.parse import urlsplit
+    from . import dnscodec
     parsed = urlsplit(proxy_url)
-    if parsed.scheme == "socks5":
-        _fail(["socks5 代理预检未接线 (批 6); 当前请用 http:// scheme 或"
-               "设 E2E_HTTPS_PROXY=http://<host>:10808"])
-    host, port = parsed.hostname, parsed.port or 80
-    problems = []
+    if parsed.scheme not in ("http", "socks5"):
+        _fail(["E2E_HTTPS_PROXY scheme 非法: %r — 仅接受 http:// 或 "
+               "socks5:// (宿主 mixed 端口 10808 双协议)" % parsed.scheme])
     try:
-        raw = socket.create_connection((host, port), timeout=timeout)
-        raw.sendall(b"CONNECT 1.1.1.1:443 HTTP/1.1\r\n"
-                    b"Host: 1.1.1.1:443\r\n\r\n")
-        status_line = raw.recv(1024).split(b"\r\n", 1)[0]
-        if b" 200 " not in status_line:
-            problems.append("代理拒绝 CONNECT 1.1.1.1:443 (%r) — 已知成因: "
-                            "规则模式未覆盖或未开局域网连接" % status_line)
-        raw.close()
+        raw = socket.create_connection((parsed.hostname, parsed.port or 80),
+                                       timeout=timeout)
     except OSError as exc:
-        problems.append("经代理连 1.1.1.1 失败 (%r). 排查清单: 代理客户端"
-                        "开否 / 允许局域网连接否 / 规则模式覆盖否" % exc)
+        _fail(["连代理 %s 失败 (%r) — 已知成因: 代理客户端未开或未允许"
+               "局域网连接; 对策: 开启后重试或设 E2E_HTTPS_PROXY=<url>"
+               % (proxy_url, exc)])
+    problems = []
+    tls = None
+    try:
+        try:
+            if parsed.scheme == "socks5":
+                _socks5_tunnel(raw, "1.1.1.1", 443, timeout)
+            else:
+                _http_connect_tunnel(raw, "1.1.1.1", 443, timeout)
+        except OSError as exc:
+            problems.append("代理拒绝建立到 1.1.1.1:443 的隧道 (%r) — "
+                            "已知成因: 规则模式未覆盖或未开局域网连接" % exc)
+            _fail(problems)
+        try:
+            ctx = ssl.create_default_context()
+            tls = ctx.wrap_socket(raw, server_hostname="1.1.1.1")
+            q = dnscodec.b64url_encode(dnscodec.build_query(
+                0x1234, "www.cloudflare.com", dnscodec.TYPE_A))
+            tls.sendall(("GET /dns-query?dns=%s HTTP/1.1\r\n"
+                         "Host: 1.1.1.1\r\n"
+                         "Accept: application/dns-message\r\n"
+                         "Connection: close\r\n\r\n" % q).encode("ascii"))
+            status_line = tls.recv(1024).split(b"\r\n", 1)[0]
+            if b" 200 " not in status_line:
+                problems.append("DoH 预检应答非 200 (%r) — 已知成因: 规则模式"
+                                "改写或拦截了 1.1.1.1" % status_line)
+        except (OSError, ssl.SSLError) as exc:
+            problems.append("经代理的 TLS/DoH 预检失败 (%r) — 排查清单: 代理"
+                            "规则模式覆盖否 / 系统根证书完整否 (Arch: "
+                            "pacman -S ca-certificates)" % exc)
+    finally:
+        if tls is not None:
+            try:
+                tls.close()
+            except OSError:
+                pass
+        raw.close()
     if problems:
         _fail(problems)
 
