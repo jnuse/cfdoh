@@ -1,7 +1,7 @@
 # Agent Note: subagent dispatch discipline
 
 Status: implemented
-Scope: .trellis/tasks/10-02-cfdoh-impl, implement.jsonl
+Scope: .trellis/tasks/archive/2026-10/10-02-cfdoh-impl, implement.jsonl
 
 ## Problem
 

@@ -83,7 +83,7 @@ cfdoh 的行为级需求: 每项功能的用户故事从 background.md 推导, �
 用户故事: 作为解析服务, 我需要按影响应答的因素隔离缓存上游应答, 以降低上游压力与查询延迟.
 
 业务规则:
-- 缓存键分量: 规范化 qname + qtype + qclass + DO 位 + CD 位 + ECS 身份串 + variant (请求参数, 池 scope, 站点池标签, h3 与 Meta ECH 的 generation)
+- 缓存键分量: 规范化 qname + qtype + qclass + DO 位 + CD 位 + ECS 身份串 + variant (请求参数, 池 scope, 池内容标签, 站点池标签, h3 与 Meta ECH 的 generation)
 - SERVFAIL 不缓存
 - 应答 TTL 取 answers 中非 OPT 记录最小值; 负应答 (NXDOMAIN 或空 answer 且含 SOA) 取 min(SOA ttl, SOA minimum, NEGATIVE_CACHE_MAX_TTL); 最终钳制 [CACHE_MIN_TTL, CACHE_MAX_TTL]
 - 剩余 TTL ≤ 原 TTL 的 CACHE_PREFETCH_PERCENT% 时立即返回并后台刷新
@@ -91,7 +91,7 @@ cfdoh 的行为级需求: 每项功能的用户故事从 background.md 推导, �
 - HTTPS 类型查询只要缓存存在 (含过期) 立即返回并后台刷新: Chromium 拿到 A/AAAA 后对 HTTPS 记录只等约 50ms
 - LRU 容量 CACHE_MAX_ENTRIES (默认 4096, 钳 128–65536)
 - CACHE_PERSIST_PATH 设置时定期与退出时快照落盘 (临时文件 + 原子改名), 启动时回读未过期条目
-- 池翻转 (h3 verdict, Meta ECH, 站点池内容) 通过 generation/内容哈希折入缓存键, 翻转即刻生效, 不等 TTL
+- 池翻转 (任一池表有效内容变化含惰性过期, h3 verdict, Meta ECH 代数) 通过内容哈希/generation 折入缓存键, 翻转即刻生效, 不等 TTL
 
 验收标准:
 - Given 同键查询在 TTL 内, When 第二次请求, Then 不外发上游
@@ -184,7 +184,7 @@ cfdoh 的行为级需求: 每项功能的用户故事从 background.md 推导, �
 - 非 Cloudflare 应答原样返回
 - CF_DROP_AAAA 开启时改写后的应答去掉 AAAA
 - 请求显式指定池 (?ip4/?ip6/?cf) 时跳过 1–4 层学习池
-- 改写启用条件: 存在任一可用池
+- 改写启用条件: CF_REWRITE_ENABLED 开启, 或该查询存在任一可用池时请求级自动提升 (rewriteCfg; 详见改写门控 note)
 
 验收标准:
 - Given Cloudflare 站点 A 查询与有效池, When 应答, Then A 记录全部来自池内且多次应答顺序轮转

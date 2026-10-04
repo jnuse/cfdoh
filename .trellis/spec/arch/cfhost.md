@@ -13,7 +13,7 @@
 对外接口:
 
 ```go
-type Config struct { ManagedDomains, Sources []string; Concurrency, Timeout, Rounds int; Hysteresis float64; FailoverRounds int; Interval time.Duration; HostsPath string }
+type Config struct { ManagedDomains, Sources []string; Concurrency, Timeout, Rounds int; Hysteresis float64; FailoverRounds int; Interval time.Duration; HostsPath, StatePath string; CandidateLimit int; HTTPVerify bool }
 func LoadConfig() (*Config, error)
 func RunOnce(ctx context.Context, cfg *Config) error
 func RunLoop(ctx context.Context, cfg *Config) error
