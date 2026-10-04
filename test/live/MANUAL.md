@@ -41,7 +41,8 @@
 ## C 系列 — cfhost 客户端用户
 
 前置 C0: 从 release 产物解压 cfhost (Windows 为 `cfhost_<ver>_windows_amd64.zip`),
-配置文件已填管辖域名 (Cloudflare 代理域名, 含 DoH 域名) 与候选源 (≥ 1),
+配置文件 `cfhost.json` 放在可执行文件同目录 (默认布局; 状态/锁/日志同目录),
+已填管辖域名 (Cloudflare 代理域名, 含 DoH 域名) 与候选源 (≥ 1),
 代理客户端 (如有) 已放行候选源域名.
 
 - [ ] C1 安装服务化 (F-026 AC1)

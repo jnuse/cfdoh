@@ -36,7 +36,8 @@ cfhost start
 cfhost status       # 当前在用地址 / 上轮测速摘要 / 下次刷新
 ```
 
-2. 配置文件 `%APPDATA%\cfdoh\cfhost.json` (或 `CFHOST_CONFIG` 指定):
+2. 配置文件 `cfhost.json` 放在 cfhost.exe 同目录 (可携式布局; 状态/锁/日志
+   也在该目录, 或 `CFHOST_CONFIG` 指定):
 
 ```json
 {

@@ -43,11 +43,11 @@ func Stop() error { return servicePlatform().stop() }
 // next refresh time and lock status. Returns "no state" when no state file
 // exists yet.
 func Status() string {
-	statePath := defaultStatePath()
-	if cfg, err := LoadConfig(); err == nil && cfg.StatePath != "" {
-		statePath = cfg.StatePath
+	cfg, err := LoadConfig()
+	if err != nil {
+		return "no state"
 	}
-	st, found := loadState(statePath)
+	st, found := loadState(cfg.StatePath)
 	if !found {
 		return "no state"
 	}
@@ -60,7 +60,7 @@ func Status() string {
 	} else {
 		fmt.Fprintf(&b, "next run: unknown\n")
 	}
-	if pid := readLockPID(statePath); pid > 0 {
+	if pid := readLockPID(cfg.StatePath); pid > 0 {
 		fmt.Fprintf(&b, "lock: held by pid %d\n", pid)
 	} else {
 		fmt.Fprintf(&b, "lock: free\n")

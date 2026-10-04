@@ -223,3 +223,38 @@ func TestValidDomain(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultConfigPathNextToExecutable(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(filepath.Dir(exe), "cfhost.json")
+	if got := defaultConfigPath(); got != want {
+		t.Fatalf("default config path = %s, want %s (executable directory)", got, want)
+	}
+}
+
+func TestStateLockLogFollowConfigDir(t *testing.T) {
+	// explicit CFHOST_CONFIG in a temp dir, no CFHOST_STATE_PATH:
+	// state defaults next to the config file
+	clearEnv(t)
+	cfgFile := writeConfigFile(t,
+		`{"managed_domains":["a.example.com"],"sources":["list:1.0.0.1"]}`)
+	t.Setenv("CFHOST_CONFIG", cfgFile)
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(cfgFile)
+	if want := filepath.Join(dir, "cfhost-state.json"); cfg.StatePath != want {
+		t.Fatalf("state path = %s, want %s (config directory)", cfg.StatePath, want)
+	}
+	// lock and log derive from the state directory, so they follow too
+	if got, want := lockPathFor(cfg.StatePath), filepath.Join(dir, "cfhost.lock"); got != want {
+		t.Fatalf("lock path = %s, want %s", got, want)
+	}
+	if got, want := stateDirOf(cfg.StatePath), dir; got != want {
+		t.Fatalf("log directory = %s, want %s", got, want)
+	}
+}

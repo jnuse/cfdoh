@@ -34,7 +34,10 @@ func Status() string
 ## 环境变量与钳制区间 (唯一真源)
 
 加载序: 默认值 → JSON 配置文件 → CFHOST_* 环境变量 (优先). 文件路径取
-CFHOST_CONFIG, 未设时用平台默认 UserConfigDir/cfdoh/cfhost.json (显式指定且读失败报错, 默认路径不存在则忽略). 文件为 snake_case 键, 零值表示未设 (hysteresis 除外, 0 是合法显式值).
+CFHOST_CONFIG, 未设时默认为可执行文件同目录的 cfhost.json (可携式布局;
+exe 路径不可得时回退 UserConfigDir/cfdoh/cfhost.json). 状态文件, 单实例锁
+与 cfhost.log 跟随配置文件所在目录 (CFHOST_STATE_PATH 可单独覆盖状态, 锁
+与日志随状态). 文件为 snake_case 键, 零值表示未设 (hysteresis 除外, 0 是合法显式值).
 
 | 环境变量 | 文件键 | 语义 | 默认 | 钳制/备注 |
 |---|---|---|---|---|
@@ -47,7 +50,7 @@ CFHOST_CONFIG, 未设时用平台默认 UserConfigDir/cfdoh/cfhost.json (显式�
 | CFHOST_FAILOVER_ROUNDS | failover_rounds | 在用地址连续失效强制重选轮数 | 3 | 1–100 |
 | CFHOST_INTERVAL_MIN | interval_min | 轮询周期 (分钟整数) | 10min | 钳 1min–24h; 唯一周期通道, 无亚分钟表达 |
 | CFHOST_HOSTS_PATH | hosts_path | hosts 路径 | 系统标准路径 (Windows: System32/drivers/etc/hosts; 其余: /etc/hosts) | — |
-| CFHOST_STATE_PATH | state_path | 状态文件路径 | UserConfigDir/cfdoh/cfhost-state.json | — |
+| CFHOST_STATE_PATH | state_path | 状态文件路径 | 配置文件所在目录 cfhost-state.json | 锁与日志随状态目录 |
 | CFHOST_CANDIDATE_LIMIT | candidate_limit | 候选数量上限 | 256 | ≤ 0 回默认; 无上限钳 |
 | CFHOST_HTTP_VERIFY | http_verify | 测速 HTTP 端到端验证 (/cdn-cgi/trace) | false | 仅 true 为真 |
 

@@ -115,8 +115,16 @@ func (fc *fileConfig) applyTo(cfg *Config) {
 
 // LoadConfig loads the client configuration: defaults, then the JSON file
 // (CFHOST_CONFIG or the platform default path), then environment variables
-// (CFHOST_*). Environment wins over the file.
+// (CFHOST_*). Environment wins over the file. The default state path
+// follows the config file's directory, so state, lock and log live wherever
+// the config lives (portable layout: binary and its runtime files in one
+// folder).
 func LoadConfig() (*Config, error) {
+	path := strings.TrimSpace(os.Getenv("CFHOST_CONFIG"))
+	explicit := path != ""
+	if !explicit {
+		path = defaultConfigPath()
+	}
 	cfg := &Config{
 		Concurrency:    defaultConcurrency,
 		Timeout:        defaultTimeoutMs,
@@ -125,14 +133,8 @@ func LoadConfig() (*Config, error) {
 		FailoverRounds: defaultFailoverRounds,
 		Interval:       defaultInterval,
 		HostsPath:      defaultHostsPath(),
-		StatePath:      defaultStatePath(),
+		StatePath:      defaultStatePath(path),
 		CandidateLimit: defaultCandidateLimit,
-	}
-
-	path := strings.TrimSpace(os.Getenv("CFHOST_CONFIG"))
-	explicit := path != ""
-	if !explicit {
-		path = defaultConfigPath()
 	}
 	if data, err := os.ReadFile(path); err == nil {
 		var fc fileConfig
@@ -269,9 +271,6 @@ func (cfg *Config) normalize() error {
 	if cfg.HostsPath == "" {
 		cfg.HostsPath = defaultHostsPath()
 	}
-	if cfg.StatePath == "" {
-		cfg.StatePath = defaultStatePath()
-	}
 	return nil
 }
 
@@ -325,15 +324,20 @@ func defaultHostsPath() string {
 	return "/etc/hosts"
 }
 
-func defaultStatePath() string {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		dir = "."
-	}
-	return filepath.Join(dir, "cfdoh", "cfhost-state.json")
+// defaultStatePath places the state file next to the config file; the lock
+// file and cfhost.log follow the state directory, so all runtime files
+// share the config's folder.
+func defaultStatePath(configPath string) string {
+	return filepath.Join(filepath.Dir(configPath), "cfhost-state.json")
 }
 
+// defaultConfigPath returns cfhost.json next to the running executable
+// (portable layout). Falls back to the user config dir if the executable
+// path cannot be determined.
 func defaultConfigPath() string {
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), "cfhost.json")
+	}
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		dir = "."

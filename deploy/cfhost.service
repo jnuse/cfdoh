@@ -8,6 +8,7 @@ Wants=network-online.target
 Type=simple
 ExecStart=/usr/local/bin/cfhost
 Environment=CFHOST_CONFIG=/etc/cfdoh/cfhost.json
+Environment=CFHOST_STATE_PATH=/var/lib/cfdoh/cfhost-state.json
 Restart=on-failure
 RestartSec=10
 
