@@ -64,7 +64,7 @@ cfdoh 的概念命名真源: 术语, 定义, 代码命名. 概念先于代码 �
 |---|---|---|
 | 应答缓存 | 按 DNS 应答为单位的 LRU 缓存, TTL 钳制, 可选落盘快照. | `cache.Cache` |
 | 缓存身份 | 缓存键前段: 规范化查询名, 类型, 类, DO, CD 与 ECS 身份串. | `cache.Identity` (构造 `IdentityOf`) |
-| 缓存变体 | 缓存键后段: 请求参数, 池 scope, 站点池标签与代数等影响应答的因素. | `buildVariant` |
+| 缓存变体 | 缓存键后段: 请求参数, 池 scope, 池内容标签, 站点池标签与代数等影响应答的因素. | `buildVariant` |
 | 预取 | 剩余 TTL 低于原 TTL 指定比例时先返回缓存再后台刷新. | `StateRefresh` / `refreshInBackground` |
 | 过期应答 | 超过 TTL 但仍在过期服务窗口内的缓存条目; 上游全部失败时以此应答, 记录 TTL 写为 30. | `StateStale` (stale 服务 TTL 30) |
 | 代数 | h3 结论与 Meta ECH 的快照版本号, 变化即递增并折入缓存键, 使翻转即刻生效. | `h3.CacheTag` / `ech.MetaCacheTag` |
