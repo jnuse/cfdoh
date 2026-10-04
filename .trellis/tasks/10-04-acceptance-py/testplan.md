@@ -221,7 +221,7 @@
 - `test_f025_block_written` — 静态源单地址 + 注入测速结果 (若 run-once 无注入通道则以全失败路径代替) → hosts 区块外逐字节保留 (区块内容由 Go 单测覆盖写入格式; 若注入通道可用则加断言区块两行)
 - `test_f026_run_once_status` — run-once → status 子命令输出在用地址/上轮摘要/下次刷新, 退出 0
 - `test_f026_second_instance_lock` — 常驻实例持有锁 → 第二实例启动 → 非 0 退出, 首实例进程存活
-- `test_f026_runloop_periodic` — RunLoop 常驻 (非 run-once), INTERVAL=3s, 候选源=受控 API → 12s 窗口内源拉取计数 ≥3 且状态文件 next_run 时刻推进 (不触发任何手动命令, 证明自动周期轮询存在)
+- `test_f026_runloop_periodic` — RunLoop 常驻 (非 run-once), INTERVAL=最小可表达周期 (CFHOST_INTERVAL_MIN=1 分钟), 候选源=受控 API → ~130s 窗口内源拉取计数 ≥2 且状态文件 next_run 时刻推进 (不触发任何手动命令, 证明自动周期轮询存在). [2026-10-04 裁决: 原拟 INTERVAL=3s; 产品钳至 1 分钟下限且配置面无亚分钟通道, spec 未定义钳制区间, 拍板修订本行而非改产品; 钳制区间补 spec 属后续任务]
 - `test_f027_minimal_config` — 仅域名+源 → run-once 正常
 - `test_f027_empty_domains_abort` — 域名列表空 → 非 0 退出且 hosts 未被修改
 - `test_f027_env_overrides_file` — 文件与环境变量同键 → 环境变量生效
@@ -278,5 +278,5 @@ C 系列 (cfhost, 客户端用户):
 3. F-023 域名源依赖系统 DNS 不可控, 不入验收.
 4. F-024 滞回/强制重选由 Go 表驱动单测覆盖; 验收层只测用户可观察的 "全败保现状".
 5. F-025 "最优不变不重写" 的 mtime 断言在 Go 单测; 验收层以 "测速全败不重写" 为可观察等价面; 若 cfhost 存在测速注入通道则升级为强断言 (实现时确认).
-6. 等待类用例 3 个 (~35s ×2, ~65s ×1), 全套件预计 4-6 分钟.
-7. 客户端配置钳制区间 spec 未定义 (cfhost.md 无钳制规则, 与服务端 config.md 不对称); test_f026_runloop_periodic 若因 Interval 被实现钳至更大值而红, 即为 spec 与实现分歧暴露, 交产品裁决; 钳制补 spec 属后续任务, 不在本任务内改产品.
+6. 等待类用例 4 个 (~35s ×2, ~65s ×1, ~130s ×1), 全套件预计 6-7 分钟.
+7. 客户端配置钳制区间 spec 未定义 (cfhost.md 无钳制规则, 与服务端 config.md 不对称); test_f026_runloop_periodic 因 Interval 被实现钳至 1 分钟下限而红, 分歧暴露后裁决 (2026-10-04): 修订 testplan 为最小可表达周期 (1 分钟, 窗口 ~130s, 拉取 ≥2), 产品钳制保持; 钳制区间补 spec 属后续任务, 不在本任务内改产品.

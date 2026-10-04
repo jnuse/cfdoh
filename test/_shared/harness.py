@@ -356,6 +356,132 @@ class Instance:
         return status, parsed, data
 
 
+# ---------------------------------------------------------------- cfhost
+
+def cfhost_env(workdir, sources=None, managed_domains=None, config=None,
+               extra=None):
+    """cfhost 子进程环境模板 (批 5, F-023 至 F-027).
+
+    - config 为 None 时写一份 "{}" 到 workdir/cfhost.json 并指向它: 隔离
+      宿主默认配置路径 (UserConfigDir/cfdoh/cfhost.json), 且空对象不覆盖
+      任何 env 值 (fileConfig 零值即 "未设置");
+    - hosts 与状态文件固定落在 workdir 沙箱 (state 子目录同时承载
+      cfhost.lock 与 cfhost.log);
+    - sources / managed_domains 为 None 时不注入对应 env (留给配置文件通道);
+    - 测速提速项 (TIMEOUT_MS/ROUNDS) 不在此默认注入: F-027 最小配置用例
+      语义上要求默认值, 由需要的用例经 extra 传入.
+    """
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    if config is None:
+        config = workdir / "cfhost.json"
+        config.write_text("{}\n")
+    env = {
+        "CFHOST_CONFIG": str(config),
+        "CFHOST_HOSTS_PATH": str(workdir / "hosts"),
+        "CFHOST_STATE_PATH": str(workdir / "state" / "cfhost-state.json"),
+    }
+    if sources is not None:
+        env["CFHOST_SOURCES"] = ";".join(sources)
+    if managed_domains is not None:
+        domains = managed_domains if isinstance(managed_domains,
+                                                (list, tuple)) \
+            else [managed_domains]
+        env["CFHOST_MANAGED_DOMAINS"] = ",".join(domains)
+    if extra:
+        env.update(extra)
+    return env
+
+
+def cfhost_state(env):
+    """读取 cfhost 状态文件; 不存在返回 None, 损坏抛 ValueError."""
+    path = Path(env["CFHOST_STATE_PATH"])
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text())
+
+
+def cfhost_lock_path(env):
+    """单实例锁文件路径 (状态文件同目录 cfhost.lock)."""
+    return Path(env["CFHOST_STATE_PATH"]).with_name("cfhost.lock")
+
+
+class CfhostProc:
+    """一个被测 cfhost 进程: 一次性子命令 run() 或常驻模式 start()/stop().
+
+    进程级编排范本同 Instance: 构建走 build_bin("cfhost"), 环境走
+    child_env (剥代理 + SSL_CERT_FILE 注入 fixtures CA, cfhost 拉取受控
+    https 源与 probe TLS 校验复用同一信任根).
+    """
+
+    def __init__(self, name, env, workdir, args=()):
+        self.name = name
+        self.env = env
+        self.workdir = Path(workdir)
+        self.args = tuple(args)
+        self.proc = None
+        self.log_path = self.workdir / ("%s.log" % name)
+        self._stopped = False
+
+    def run(self, timeout=90.0):
+        """一次性子命令: 阻塞运行至退出, 捕获 stdout/stderr."""
+        bin_path = build_bin("cfhost")
+        return subprocess.run(
+            [str(bin_path)] + list(self.args), cwd=str(self.workdir),
+            env=child_env(self.env), capture_output=True, text=True,
+            timeout=timeout)
+
+    def start(self):
+        """常驻模式: 后台启动 (start_new_session), 日志落文件."""
+        ensure_readiness()
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        bin_path = build_bin("cfhost")
+        log_fd = open(self.log_path, "ab")
+        try:
+            self.proc = subprocess.Popen(
+                [str(bin_path)] + list(self.args), cwd=str(self.workdir),
+                env=child_env(self.env), stdout=log_fd,
+                stderr=subprocess.STDOUT, start_new_session=True)
+        finally:
+            log_fd.close()
+        return self
+
+    def stop(self, sig=signal.SIGTERM, expect_exit=0, timeout=20.0):
+        """优雅停止并断言退出码; 已停止则直接返回 (幂等)."""
+        if self._stopped or self.proc is None:
+            return 0
+        self.proc.send_signal(sig)
+        try:
+            self.proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.kill()
+            raise AssertionError(
+                "[%s] 收到 %s 后 %ds 未退出. 日志尾部:\n%s"
+                % (self.name, sig.name, timeout, self.log_tail()))
+        self._stopped = True
+        code = self.proc.returncode
+        if expect_exit is not None and code != expect_exit:
+            raise AssertionError(
+                "[%s] 退出码 %s != %s. 日志尾部:\n%s"
+                % (self.name, code, expect_exit, self.log_tail()))
+        return code
+
+    def kill(self):
+        if self.proc is not None and self.proc.poll() is None:
+            self.proc.kill()
+            self.proc.wait(timeout=10)
+        self._stopped = True
+
+    def log_text(self):
+        try:
+            return self.log_path.read_text(errors="replace")
+        except OSError:
+            return ""
+
+    def log_tail(self, lines=20):
+        return "\n".join(self.log_text().splitlines()[-lines:])
+
+
 _readiness_flag = {"done": False}
 _readiness_lock = threading.Lock()
 
