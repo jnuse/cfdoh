@@ -6,12 +6,12 @@
 
 ## 批 1: 基础设施
 
-- [ ] test/_shared/dnscodec.py: 编码 (header/question/OPT+ECS), 解码 (flags/question/A/AAAA/CNAME/HTTPS SvcParam/OPT ECS), 压缩指针跟随
-- [ ] test/_shared/fakestack.py: 受控 https 工厂 (应答表/延迟/失败注入/出向记录, 多角色复用)
-- [ ] test/_shared/harness.py: build/spawn/就绪/SIGTERM/退出码与快照断言/DoH 与 admin 客户端封装/端口登记
-- [ ] test/_shared/preflight.py: PF1-PF4 (版本/端口占用含 PID/证书有效期/启动日志扫描); live 哨兵 PF5-PF6 骨架
-- [ ] fixtures: 证书与密钥预生成提交, make-certs.sh; 冻结请求字节与假上游应答字节
-- [ ] 冒烟: 单实例起停 + /health + 一次 DoH 查询走通
+- [x] test/_shared/dnscodec.py: 编码 (header/question/OPT+ECS), 解码 (flags/question/A/AAAA/CNAME/HTTPS SvcParam/OPT ECS), 压缩指针跟随
+- [x] test/_shared/fakestack.py: 受控 https 工厂 (应答表/延迟/失败注入/出向记录, 多角色复用)
+- [x] test/_shared/harness.py: build/spawn/就绪/SIGTERM/退出码与快照断言/DoH 与 admin 客户端封装/端口登记
+- [x] test/_shared/preflight.py: PF1-PF4 (版本/端口占用含 PID/证书有效期/启动日志扫描); live 哨兵 PF5-PF6 骨架
+- [x] fixtures: 证书与密钥预生成提交, make-certs.sh; 冻结请求字节与假上游应答字节
+- [x] 冒烟: 单实例起停 + /health + 一次 DoH 查询走通
 
 ## 批 2: DoH 端点合同 (F-001, F-002 端点面, F-004 用户可观察, F-005, F-017)
 
