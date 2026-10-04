@@ -23,19 +23,19 @@
 
 ## 批 3: 池与改写 (F-007 至 F-016, F-018, F-020)
 
-- [ ] F-007 分层: 显式参数 > client /24 池 > isp > national; 层 TTL 过期回落
-- [ ] F-008 admin 鉴权矩阵: 401/403 (hub 写 default)/400 (非 CF 网段整批拒)/404 (未配 ADMIN_TOKEN 需独立实例)
-- [ ] F-009 池改写: A 记录全来自池, 轮转 (多次查询首条分布 ≥2), 非 CF 原样, AAAA drop 开关
-- [ ] F-010 ECH: CF 站点 HTTPS 含 ech, 非 CF 无注入, 源不可达不阻塞
-- [ ] F-011 h3: verdict 上报后 ALPN 门控, 翻转即刻生效
-- [ ] F-012 展平: CNAME 链记录挂查询名, explain chromium 判定可用
-- [ ] F-013 出向断言: .cn 域名上游收到 ECS /24, 非 .cn 无 ECS, 自带 ECS 至多一个
-- [ ] F-014 GitHub/X/站点池钉住与撤销回落
-- [ ] F-015 Meta 三态 (种子/学习/暂停) 与换代
-- [ ] F-016 规则: block → REFUSED 无外发, replace-a 继承 TTL, 远程规则失败回退
-- [ ] F-018 explain: 决策链逐步, 非法 name 400, 只读
-- [ ] F-020 admin 状态查询与自检上报
-- [ ] 跨用户流: 探针上报 → 浏览器观察到; hubfeed 污染池 → 浏览器不受影响 (F-028 的池校验面)
+- [x] F-007 分层: 显式参数 > client /24 池 > isp > national; 层 TTL 过期回落
+- [x] F-008 admin 鉴权矩阵: 401/403 (hub 写 default)/400 (非 CF 网段整批拒)/404 (未配 ADMIN_TOKEN 需独立实例)
+- [x] F-009 池改写: A 记录全来自池, 轮转 (多次查询首条分布 ≥2), 非 CF 原样, AAAA drop 开关
+- [x] F-010 ECH: CF 站点 HTTPS 含 ech, 非 CF 无注入, 源不可达不阻塞
+- [x] F-011 h3: verdict 上报后 ALPN 门控, 翻转即刻生效
+- [x] F-012 展平: CNAME 链记录挂查询名, explain chromium 判定可用
+- [x] F-013 出向断言: .cn 域名上游收到 ECS /24, 非 .cn 无 ECS, 自带 ECS 至多一个
+- [x] F-014 GitHub/X/站点池钉住与撤销回落
+- [x] F-015 Meta 三态 (种子/学习/暂停) 与换代
+- [x] F-016 规则: block → REFUSED 无外发, replace-a 继承 TTL, 远程规则失败回退
+- [x] F-018 explain: 决策链逐步, 非法 name 400, 只读
+- [x] F-020 admin 状态查询与自检上报
+- [x] 跨用户流: 探针上报 → 浏览器观察到; hubfeed 污染池 → 浏览器不受影响 (F-028 的池校验面)
 
 ## 批 4: 上游行为与生命周期 (F-003, F-019, F-021, F-022, F-028)
 

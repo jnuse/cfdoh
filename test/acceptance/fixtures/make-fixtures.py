@@ -7,6 +7,10 @@
   指针跟随解码; 假上游回填事务 ID 后原样服务
 - attack_*.bin: F-002 端点面攻击包 (指针成环 / 高位 label / qdcount 超限 /
   尾随字节)
+- echconfig.b64: cloudflare-ech.com HTTPS 记录的 ech SvcParam 字节
+  (2026-10 经 1.1.1.1 DoH 抓取的公开 DNS 数据, 结构合法的 ECHConfigList);
+  测试用例在运行时把公钥末字节替换为 tag 字节派生互异配置
+  (见各 test_f010/f012/f018 文件内 ech_config helper), 本脚本不重生它
 
 生成后不要手改; 需要新 fixture 时改本脚本再跑.
 """
