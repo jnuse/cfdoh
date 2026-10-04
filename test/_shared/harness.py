@@ -293,8 +293,15 @@ class Instance:
             conn.close()
 
     def request_tls(self, method, path, headers=None, body=None, timeout=10.0):
-        """S-TLS 族直连模式客户端: 用 fixtures CA 校验服务端证书."""
+        """S-TLS 族直连模式客户端: 用 fixtures CA 校验服务端证书.
+
+        注: Python 3.14 起 create_default_context 默认开启 VERIFY_X509_STRICT,
+        测试自签 CA 无 keyUsage 扩展会误拒; 此处仅关掉该 pedantic 位,
+        证书链与主机名校验保持完整.
+        """
         ctx = ssl.create_default_context(cafile=str(FIXTURES / "ca.pem"))
+        if hasattr(ssl, "VERIFY_X509_STRICT"):
+            ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
         conn = http.client.HTTPSConnection("127.0.0.1", self.port,
                                            timeout=timeout, context=ctx)
         try:

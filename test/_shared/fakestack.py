@@ -12,8 +12,10 @@ ThreadingHTTPServer + ssl 包装, 载入 fixtures 证书. 一个工厂实例化�
 
 import os
 import ssl
+import sys
 import threading
 import time
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -144,6 +146,10 @@ class FakeStack:
                             os.path.join(_FIXTURES, "server.key"))
         self._server = ThreadingHTTPServer(("127.0.0.1", self.port), Handler)
         self._server.daemon_threads = True
+        # 被测实例断开连接 (空闲超时/进程退出) 时服务线程会抛
+        # BrokenPipeError/ConnectionResetError, 属预期噪音; 压掉以免污染日志,
+        # 其余异常照常打印.
+        self._server.handle_error = self._silence_disconnect
         self._server.socket = ctx.wrap_socket(self._server.socket,
                                               server_side=True)
         self._thread = threading.Thread(target=self._server.serve_forever,
@@ -152,6 +158,17 @@ class FakeStack:
         self._thread.start()
         self._started = True
         return self
+
+    def _silence_disconnect(self, request, client_address):
+        # socketserver.handle_error 只传 (request, client_address),
+        # 异常须从 exc_info 取; 断连属预期噪音, 其余照常打印.
+        exc = sys.exc_info()[1]
+        if exc is None or isinstance(exc, (BrokenPipeError,
+                                            ConnectionResetError)):
+            return
+        sys.stderr.write("Exception occurred during processing of request "
+                         "from %r\n" % (client_address,))
+        traceback.print_exc()
 
     def stop(self):
         if not self._started:

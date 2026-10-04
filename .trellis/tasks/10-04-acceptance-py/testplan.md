@@ -11,7 +11,7 @@
 | S-DROP | S-STD + CF_DROP_AAAA=1 | F-009 |
 | S-HOST | S-STD + PUBLIC_HOSTNAMES=doh.test | F-021 AC3 |
 | S-TLS | 直连模式, 证书=fixtures 对 | F-021 AC2 |
-| S-CONFIG | CONFIG_PATH 文件 + 环境变量冲突 | F-022 AC3 |
+| S-CONFIG | CFDOH_CONFIG 文件 + 环境变量冲突 (勘误: 原记 CONFIG_PATH, 实名 CFDOH_CONFIG) | F-022 AC3 |
 | C1 | cfhost: HOSTS_PATH=临时文件, 源=受控 API/list | F-023 至 F-027 |
 
 ## 环境哨兵 (preflight, _shared/preflight.py)
@@ -202,7 +202,7 @@
 
 - `test_f022_min_config_works` — 仅 UPSTREAMS 受控, 其余默认 → 应答正常且无池不改写 (与上游应答一致)
 - `test_f022_clamped_logged` — UPSTREAM_TIMEOUT_MS=99999 → 启动日志含钳制提示且值=15000 (从脱敏摘要断言)
-- `test_f022_env_overrides_file` — CONFIG_PATH 文件 PORT=A + 环境变量 PORT=B → 实际监听 B
+- `test_f022_env_overrides_file` — CFDOH_CONFIG 文件 PORT=A (勘误: 原记 CONFIG_PATH) + 环境变量 PORT=B → 实际监听 B
 
 ### F-028 公开池拉取 [S-STD] (5)
 
