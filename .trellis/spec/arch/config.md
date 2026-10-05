@@ -22,7 +22,7 @@ func (c *Config) TLSEnabled() bool
 
 | 变量 | 语义 | 默认 | 钳制/校验 |
 |---|---|---|---|
-| CFDOH_CONFIG | KEY=VALUE 配置文件路径, 环境变量优先于文件 | (无) | 文件不存在报错; 畸形行忽略并告警 |
+| CFDOH_CONFIG | KEY=VALUE 配置文件路径, 环境变量优先于文件 | (无) | 文件不存在报错; 畸形行忽略并告警; 单行上限 4MiB, 超限报错 |
 | UPSTREAMS | 逗号分隔 DoH 上游 | cloudflare,google,quad9 | 仅保留 https 前缀 |
 | ECS_UPSTREAMS | ECS 查询走的上游 | 同 UPSTREAMS | 同上 |
 | UPSTREAM_TIMEOUT_MS | 单次上游尝试超时 | 2500 | 250–15000 |

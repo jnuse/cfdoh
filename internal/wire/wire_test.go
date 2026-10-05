@@ -153,6 +153,35 @@ func TestParseAttackPackets(t *testing.T) {
 			out[12] = 0x41
 			return out
 		}},
+		{"name 257 wire bytes", func(b []byte) []byte {
+			// 4 labels x 63 bytes: 1 + 4*(1+63) = 257 wire bytes — decodable
+			// per-label but never re-encodable, so decode must reject it.
+			pkt := []byte{0, 1, 0x01, 0, 0, 1, 0, 0, 0, 0, 0, 0}
+			for i := 0; i < 4; i++ {
+				pkt = append(pkt, 63)
+				pkt = append(pkt, bytes.Repeat([]byte{'a'}, 63)...)
+			}
+			pkt = append(pkt, 0, 0, 1, 0, 1) // root + A + IN
+			return pkt
+		}},
+		{"oversized name via compression", func(b []byte) []byte {
+			// header: qd=1, ns=1; question name and the NS rdata both point
+			// at a four-label chain (1 + 4*64 = 257 wire bytes) stored once:
+			// each label is decodable, the spliced name is not re-encodable.
+			pkt := []byte{0, 1, 0x01, 0, 0, 1, 0, 0, 0, 1, 0, 0}
+			pkt = append(pkt, 0xC0, 0x1F)       // question name → offset 31
+			pkt = append(pkt, 0, 1, 0, 1)       // A IN
+			pkt = append(pkt, 0)                // authority owner: root
+			pkt = append(pkt, 0, 2, 0, 1)       // type NS, class IN
+			pkt = append(pkt, 0, 0, 0, 0, 0, 2) // ttl 0, rdlen 2
+			pkt = append(pkt, 0xC0, 0x1F)       // rdata → offset 31
+			for i := 0; i < 4; i++ {            // offset 31: the chain
+				pkt = append(pkt, 63)
+				pkt = append(pkt, bytes.Repeat([]byte{'b'}, 63)...)
+			}
+			pkt = append(pkt, 0)
+			return pkt
+		}},
 	}
 	for _, tc := range cases {
 		if _, err := Parse(tc.mutcb(valid)); err == nil {
@@ -252,6 +281,8 @@ func TestResponseTTL(t *testing.T) {
 		{"nxdomain soa", &Packet{Header: Header{Flags: 0x8003}, Authorities: []Record{
 			{Name: "a.", Type: TypeSOA, TTL: 1800, RData: soa},
 		}}, 30, 3600, 300, 300},
+		{"nxdomain without soa", &Packet{Header: Header{Flags: 0x8003}}, 30, 3600, 300, 0},
+		{"nodata without soa", &Packet{Header: Header{Flags: 0x8000}}, 30, 3600, 300, 0},
 		{"clamp up", &Packet{Header: Header{Flags: 0x8000}, Answers: []Record{
 			{Name: "a.", Type: TypeA, TTL: 5, RData: A{}},
 		}}, 30, 3600, 300, 30},

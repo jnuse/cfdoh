@@ -40,6 +40,7 @@ const (
 	maxNameJumps    = 32
 	maxLabelLength  = 63
 	maxWireName     = 255
+	maxNameLabels   = 128
 )
 
 // Header is the 12-byte DNS message header.

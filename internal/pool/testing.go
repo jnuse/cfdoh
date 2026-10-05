@@ -10,3 +10,18 @@ func ResetHostPoolsForTesting() {
 	cachedValid = false
 	tagMu.Unlock()
 }
+
+// ResetLearnedPoolsForTesting clears the three learned pool tables and the
+// content-tag cache. Test support so cross-package tests (resolver) start
+// from a deterministic learned state instead of inheriting whatever earlier
+// tests uploaded; never call from production paths.
+func ResetLearnedPoolsForTesting() {
+	mu.Lock()
+	defaults = newPoolTable(MaxDefaultSources)
+	scoped = newPoolTable(MaxScopedPools)
+	ispPools = newPoolTable(MaxIspPools)
+	mu.Unlock()
+	tagMu.Lock()
+	cachedValid = false
+	tagMu.Unlock()
+}

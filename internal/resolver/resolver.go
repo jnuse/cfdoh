@@ -174,9 +174,11 @@ func resolveFresh(ctx context.Context, query []byte, opts *Options, cfg *config.
 		if encoded, encErr := resp.Encode(); encErr == nil {
 			if _, ok := sharedCache(cfg).Put(plan.id, encoded, cfg); !ok {
 				note(notes, "cache: answer not stored (SERVFAIL or zero TTL)")
+				logCacheWriteError(cfg, "put rejected (SERVFAIL or zero TTL)")
 			}
 		} else {
 			note(notes, "cache: answer not stored (encode failed: %v)", encErr)
+			logCacheWriteError(cfg, fmt.Sprintf("encode failed: %v", encErr))
 		}
 	}
 	return &Result{Packet: finalizeAnswer(query, resp), Upstream: res.Upstream}, nil
@@ -202,6 +204,16 @@ func refreshInBackground(ctx context.Context, query []byte, opts *Options, cfg *
 	if _, err := resolveFresh(context.WithoutCancel(ctx), query, opts, cfg, nil, true); err != nil {
 		slog.Warn("event", "event", "prefetch_error", "detail", err.Error())
 	}
+}
+
+// logCacheWriteError emits the cache_write_error event (resolver.md event
+// catalog). DEBUG-gated like the baseline's warn print; the detail carries
+// why the answer was not stored.
+func logCacheWriteError(cfg *config.Config, detail string) {
+	if cfg == nil || !cfg.Debug {
+		return
+	}
+	slog.Warn("event", "event", "cache_write_error", "detail", detail)
 }
 
 // basePlan holds the query-derived state shared by both entry points.

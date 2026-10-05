@@ -85,7 +85,7 @@ cfdoh 的行为级需求: 每项功能的用户故事从 background.md 推导, �
 业务规则:
 - 缓存键分量: 规范化 qname + qtype + qclass + DO 位 + CD 位 + ECS 身份串 + variant (请求参数, 池 scope, 池内容标签, 站点池标签, h3 与 Meta ECH 的 generation)
 - SERVFAIL 不缓存
-- 应答 TTL 取 answers 中非 OPT 记录最小值; 负应答 (NXDOMAIN 或空 answer 且含 SOA) 取 min(SOA ttl, SOA minimum, NEGATIVE_CACHE_MAX_TTL); 最终钳制 [CACHE_MIN_TTL, CACHE_MAX_TTL]
+- 应答 TTL 取 answers 中非 OPT 记录最小值; 负应答 (NXDOMAIN 或空 answer 且含 SOA) 取 min(SOA ttl, SOA minimum, NEGATIVE_CACHE_MAX_TTL); 最终钳制 [CACHE_MIN_TTL, CACHE_MAX_TTL]; TTL 0 的记录视为不可缓存, 不钳入区间
 - 剩余 TTL ≤ 原 TTL 的 CACHE_PREFETCH_PERCENT% 时立即返回并后台刷新
 - 过期不超过 CACHE_STALE_TTL 且上游全部失败时返回过期应答, 其记录 TTL 写为 30
 - HTTPS 类型查询只要缓存存在 (含过期) 立即返回并后台刷新: Chromium 拿到 A/AAAA 后对 HTTPS 记录只等约 50ms

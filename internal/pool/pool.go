@@ -365,7 +365,9 @@ func mergedDomainPool(ctx context.Context, domains []string, cfg *config.Config)
 	return out, nil
 }
 
-// LearnedStatus renders the merged nationwide self-learning pool.
+// LearnedStatus renders the merged nationwide self-learning pool. Only
+// sources whose reports are still valid are listed (aligns the baseline:
+// lapsed probers must not linger in the status view).
 func LearnedStatus() *LearnedReport {
 	mu.RLock()
 	defer mu.RUnlock()
@@ -374,7 +376,11 @@ func LearnedStatus() *LearnedReport {
 		return nil
 	}
 	report := &LearnedReport{IPv4: pools.ipv4, IPv6: pools.ipv6, ExpiresAt: pools.expiresAt}
+	current := now()
 	for _, pool := range defaults.snapshot() {
+		if pool.expiresAt <= current {
+			continue
+		}
 		report.Sources = append(report.Sources, SourceStatus{
 			Source: pool.source, IPv4: pool.ipv4, IPv6: pool.ipv6, ExpiresAt: pool.expiresAt,
 		})

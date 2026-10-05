@@ -95,6 +95,30 @@ func TestCombineRankingsIPv6Blocks(t *testing.T) {
 		"2001:db8:aaaa::1", "2001:db8:aaaa::2", "2001:db8:bbbb::1")
 }
 
+func TestCombineRankingsInterleavePerBlockCap(t *testing.T) {
+	// three disjoint lists: no majority anywhere, so the interleave path
+	// runs; one prober's list holds six addresses in a single /24. The
+	// interleaved merge must cap that block at two so a lone prober cannot
+	// monopolize one /24 (F-007: 交错合并且每 /24 不超过 2 个).
+	lists := [][]string{
+		{"10.0.1.1", "10.0.1.2", "10.0.1.3", "10.0.1.4", "10.0.1.5", "10.0.1.6"},
+		{"20.0.1.1"},
+		{"30.0.1.1"},
+	}
+	got := CombineRankings(lists, 6)
+	blocks := make(map[string]int)
+	for _, ip := range got {
+		blocks[addressBlock(ip)]++
+	}
+	if blocks["10.0.1"] != 2 {
+		t.Fatalf("interleaved /24 count = %d (output %v)", blocks["10.0.1"], got)
+	}
+	// the two out-of-block addresses still contribute: 2 + 1 + 1
+	if len(got) != 4 {
+		t.Fatalf("interleaved output = %v", got)
+	}
+}
+
 func TestSetLearnedRoutingAndValidation(t *testing.T) {
 	resetPool(t, 1_000_000)
 	if err := SetLearned([]string{"999.1.1.1"}, nil, 60, "p", ""); err == nil {
@@ -148,6 +172,26 @@ func TestExpiryDropsPools(t *testing.T) {
 	now = func() int64 { return 1_000_000 + 101_000 }
 	if st := LearnedStatus(); st != nil {
 		t.Fatal("expired source must drop")
+	}
+}
+
+func TestLearnedStatusOmitsExpiredSources(t *testing.T) {
+	// one lapsed and one live prober: the merged pool stays alive from the
+	// live source, but the Sources view must not list the expired one.
+	resetPool(t, 1_000_000)
+	if err := SetLearned([]string{"1.1.1.1"}, nil, 60, "stale-probe", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetLearned([]string{"2.2.2.1"}, nil, 600, "live-probe", ""); err != nil {
+		t.Fatal(err)
+	}
+	now = func() int64 { return 1_000_000 + 61_000 }
+	st := LearnedStatus()
+	if st == nil {
+		t.Fatal("live source must keep the merged pool alive")
+	}
+	if len(st.Sources) != 1 || st.Sources[0].Source != "live-probe" {
+		t.Fatalf("sources = %+v", st.Sources)
 	}
 }
 

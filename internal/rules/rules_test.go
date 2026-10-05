@@ -491,3 +491,27 @@ func answerIPsOf(resp *wire.Packet) []string {
 	}
 	return out
 }
+
+// I1 regression: a wrong-typed qtype (string instead of number, nested or
+// flat) must make the rule never match instead of widening it to every
+// qtype (refer semantics); a valid numeric qtype still matches.
+func TestWrongTypedQTypeNeverMatches(t *testing.T) {
+	rs := mustParse(t, `[
+		{"match":{"domain_suffix":["example.com"],"qtype":"A"},"action":"block"},
+		{"match":{"domain_suffix":["str.example.com"],"qtype":"1"},"action":"block"},
+		{"domain_suffix":"flat.example.org","qtype":"HTTPS","action":"block"},
+		{"match":{"domain_suffix":["probe.example.net"],"qtype":1},"action":"block"}
+	]`)
+	if rs.ShouldBlock(queryPacket("ads.example.com", wire.TypeA)) {
+		t.Fatal("wrong-typed qtype (type name string) must never match")
+	}
+	if rs.ShouldBlock(queryPacket("www.str.example.com", wire.TypeA)) {
+		t.Fatal("wrong-typed qtype (numeric string) must never match")
+	}
+	if rs.ShouldBlock(queryPacket("api.flat.example.org", wire.TypeHTTPS)) {
+		t.Fatal("flat wrong-typed qtype must never match")
+	}
+	if !rs.ShouldBlock(queryPacket("www.probe.example.net", wire.TypeA)) {
+		t.Fatal("valid numeric qtype must still match")
+	}
+}

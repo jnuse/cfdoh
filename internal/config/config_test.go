@@ -203,3 +203,33 @@ func contains(haystack, needle string) bool {
 		return false
 	})()
 }
+
+// L10 regression: a single legitimate line beyond the 64KiB scanner default
+// (e.g. an embedded rules payload) loads fine; only lines past the 4MiB cap
+// still fail.
+func TestLongConfigLineAccepted(t *testing.T) {
+	os.Unsetenv("ADMIN_TOKEN")
+	dir := t.TempDir()
+	long := strings.Repeat("a", 100*1024)
+	path := filepath.Join(dir, "cfdoh.env")
+	if err := os.WriteFile(path, []byte("ADMIN_TOKEN="+long+"\nPORT=9000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CFDOH_CONFIG", path)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("long single line must load: %v", err)
+	}
+	if cfg.Port != 9000 || cfg.AdminToken != long {
+		t.Fatalf("long line value lost: port=%d token-len=%d", cfg.Port, len(cfg.AdminToken))
+	}
+
+	over := filepath.Join(dir, "over.env")
+	if err := os.WriteFile(over, []byte("ADMIN_TOKEN="+strings.Repeat("a", (4<<20)+8)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CFDOH_CONFIG", over)
+	if _, err := Load(); err == nil {
+		t.Fatal("line beyond the 4MiB cap must fail")
+	}
+}

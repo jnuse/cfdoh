@@ -41,12 +41,17 @@ const (
 	ActionBlock        Action = "block"
 )
 
-// RuleMatch holds all AND-combined match conditions. Empty fields match anything.
+// RuleMatch holds all AND-combined match conditions. Empty fields match
+// anything. A wrong-typed qtype marks the rule as never matching (refer
+// semantics: an unmatched-type condition cannot hit) instead of widening
+// the match to every qtype.
 type RuleMatch struct {
 	DomainExact    []string
 	DomainSuffix   []string
 	QType          []uint16
 	ResponseIPCIDR []string
+
+	qtypeInvalid bool
 }
 
 // HTTPSReload rewrites ipv4hint/ipv6hint of HTTPS records.
@@ -83,8 +88,9 @@ type RuleSet struct {
 
 // Parse decodes the three accepted shapes: bare rule array, {"rules": [...]}
 // wrapper and host-map shorthand. Rules accept the nested form and the flat
-// shorthand (see parseRule). Wrong-typed fields are treated as absent;
-// non-object array items are skipped; the result is capped at maxRules.
+// shorthand (see parseRule). Wrong-typed fields are treated as absent, with
+// one exception: a wrong-typed qtype makes the rule never match; non-object
+// array items are skipped; the result is capped at maxRules.
 func Parse(data []byte) (*RuleSet, error) {
 	trimmed := strings.TrimSpace(string(data))
 	if trimmed == "" {
@@ -135,7 +141,8 @@ func parseRuleArray(raw json.RawMessage) (*RuleSet, error) {
 // (string shorthand or object); the flat shorthand puts the match conditions
 // (domain_exact, domain_suffix, qtype, response_ip_cidr) and the replacement
 // values (ipv4/ipv6, same keys as the host-map shorthand) on the rule object
-// itself. Wrong-typed fields are treated as absent in both forms.
+// itself. Wrong-typed fields are treated as absent in both forms, except a
+// wrong-typed qtype which makes the rule never match.
 func parseRule(item json.RawMessage) (*Rule, bool) {
 	var raw struct {
 		Match          json.RawMessage `json:"match"`
@@ -155,10 +162,15 @@ func parseRule(item json.RawMessage) (*Rule, bool) {
 		parseMatch(raw.Match, &rule.Match)
 	}
 	// flat shorthand conditions merge after the nested ones; each accepts a
-	// scalar or a list
+	// scalar or a list. A wrong-typed qtype poisons the merged condition
+	// (never matches), every other wrong-typed field stays absent.
 	rule.Match.DomainExact = append(rule.Match.DomainExact, stringOrList(raw.DomainExact)...)
 	rule.Match.DomainSuffix = append(rule.Match.DomainSuffix, stringOrList(raw.DomainSuffix)...)
-	rule.Match.QType = append(rule.Match.QType, qtypeList(raw.QType)...)
+	if qtypes, ok := qtypeList(raw.QType); ok {
+		rule.Match.QType = append(rule.Match.QType, qtypes...)
+	} else {
+		rule.Match.qtypeInvalid = true
+	}
 	rule.Match.ResponseIPCIDR = append(rule.Match.ResponseIPCIDR, stringOrList(raw.ResponseIPCIDR)...)
 	if len(raw.Action) > 0 {
 		parseAction(raw.Action, &rule.Action)
@@ -182,7 +194,11 @@ func parseMatch(raw json.RawMessage, m *RuleMatch) {
 	}
 	m.DomainExact = stringList(fields["domain_exact"])
 	m.DomainSuffix = stringList(fields["domain_suffix"])
-	m.QType = qtypeList(fields["qtype"])
+	if qtypes, ok := qtypeList(fields["qtype"]); ok {
+		m.QType = qtypes
+	} else {
+		m.qtypeInvalid = true
+	}
 	m.ResponseIPCIDR = stringList(fields["response_ip_cidr"])
 }
 
@@ -436,19 +452,22 @@ func stringOrList(raw json.RawMessage) []string {
 	return stringList(raw)
 }
 
-func qtypeList(raw json.RawMessage) []uint16 {
+// qtypeList decodes the qtype condition. ok is false when the field is
+// present but wrong-typed (neither a number nor a list of numbers); callers
+// must then treat the condition as never matching.
+func qtypeList(raw json.RawMessage) (list []uint16, ok bool) {
 	if len(raw) == 0 {
-		return nil
+		return nil, true
 	}
 	var single uint16
 	if err := json.Unmarshal(raw, &single); err == nil {
-		return []uint16{single}
+		return []uint16{single}, true
 	}
 	var items []uint16
 	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil
+		return nil, false
 	}
-	return items
+	return items, true
 }
 
 // validAddresses filters a host-map address list: strict parse per family,

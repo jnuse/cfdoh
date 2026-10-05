@@ -321,6 +321,43 @@ func TestDoHValidationMatrix(t *testing.T) {
 	}
 }
 
+func TestAcceptHeaderPerItem(t *testing.T) {
+	// Accept is judged per comma-separated item (trimmed, case-insensitive):
+	// an item starting with application/dns-message allows, an item that is
+	// exactly */* allows — qualified wildcards and substrings do not.
+	ts, _ := newTS(t, baseCfg())
+	valid := base64.RawURLEncoding.EncodeToString(buildQuery(1, "www.example.com", wire.TypeA))
+	cases := []struct {
+		accept string
+		want   int
+	}{
+		{"", http.StatusOK},                                        // missing allows
+		{"*/*", http.StatusOK},                                     // exact wildcard
+		{"application/dns-message", http.StatusOK},                 // exact type
+		{"APPLICATION/DNS-MESSAGE", http.StatusOK},                 // case-insensitive
+		{"text/html,application/dns-message;q=0.1", http.StatusOK}, // item-level match
+		{"text/html, */*", http.StatusOK},                          // exact wildcard item
+		{"xapplication/dns-message", http.StatusNotAcceptable},     // substring must not pass
+		{"*/*;q=0", http.StatusNotAcceptable},                      // qualified wildcard is not */*
+		{"application/dns-messagex", http.StatusOK},                // prefix per refer
+		{"text/html", http.StatusNotAcceptable},
+	}
+	for _, tc := range cases {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/dns-query?dns="+valid, nil)
+		if tc.accept != "" {
+			req.Header.Set("Accept", tc.accept)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != tc.want {
+			t.Fatalf("accept %q: status = %d, want %d", tc.accept, resp.StatusCode, tc.want)
+		}
+	}
+}
+
 func TestDoH413(t *testing.T) {
 	cfg := baseCfg()
 	cfg.MaxDNSPacketSize = 32
@@ -1208,5 +1245,31 @@ func TestAdminSelfcheckMetaEch(t *testing.T) {
 	}
 	if _, state := ech.MetaOverride(); state != ech.MetaLearned {
 		t.Fatalf("state after unknown state = %d, want learned (untouched)", state)
+	}
+}
+
+// L9 regression: aliases colliding with built-in routes or with an earlier
+// alias are skipped with a warning instead of panicking inside ServeMux;
+// unique aliases (including the first of a duplicated pair) stay effective.
+func TestPathAliasConflictSkipped(t *testing.T) {
+	upstream := newFakeUpstream(t, answerA)
+	cfg := baseCfg(upstream.URL)
+	cfg.PathAliases = []string{"/dns-query", "/explain", "/health", "/dupe", " /dupe ", "/linuxdo"}
+	ts, _ := newTS(t, cfg) // colliding registrations must not panic
+
+	query := base64.RawURLEncoding.EncodeToString(buildQuery(9, "www.alias.doh.test", wire.TypeA))
+	for _, path := range []string{"/linuxdo", "/dupe"} {
+		resp, err := http.Get(ts.URL + path + "?dns=" + query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("%s = %d, want 200", path, resp.StatusCode)
+		}
+		if parsed, err := wire.Parse(body); err != nil || parsed.Header.ID != 9 {
+			t.Fatalf("%s answer ID = %#x (err %v), want 9", path, parsed.Header.ID, err)
+		}
 	}
 }

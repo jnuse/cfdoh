@@ -41,6 +41,6 @@ func UpsertSvcParam(r *Record, key uint16, value []byte)
 扩展规则:
 - 新记录类型扩展 RData 封闭接口与编解码对, 不改 Parse 与 Encode 主流程.
 - 域名匹配语义变更须同步 rules, ecs, h3 的调用方语义.
-- 防御性检查清单 (计数上限, 尾随字节, label 类型, 参数递增) 不可放松.
+- 防御性检查清单 (计数上限, 尾随字节, label 类型, 参数递增) 不可放松. 已登记豁免: 上游应答解析 (upstream 校验链, resolver 刷新, ech 源域) 使用 ParseRelaxed 允许尾随字节, 对齐真实上游互操作容错; 入站查询与缓存存取保持严格 Parse.
 
 事件目录: 无.

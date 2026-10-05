@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -190,6 +192,7 @@ func waitHits(t *testing.T, hits *atomic.Int64, want int64) {
 const deadUpstream = "https://127.0.0.1:1/dns-query"
 
 func TestResolveRewritesFromLearnedPool(t *testing.T) {
+	pool.ResetLearnedPoolsForTesting()
 	resetCache()
 	loadRanges(t)
 	srv, hits := newFakeUpstream(t, respondWith(func(q wire.Question) []wire.Record {
@@ -390,6 +393,43 @@ func TestResolveUpstreamServfailNotCached(t *testing.T) {
 	}
 	if hits.Load() != 2 {
 		t.Fatalf("hits = %d, SERVFAIL must not be cached", hits.Load())
+	}
+}
+
+func TestResolveCacheWriteErrorEmitted(t *testing.T) {
+	// resolver.md event catalog: cache_write_error fires when the store
+	// path cannot persist the answer. An upstream SERVFAIL is a valid
+	// answer that Put rejects (TTL 0) — the exact spot the event was
+	// missing. DEBUG-gated like the baseline's warn print.
+	resetCache()
+	srv, _ := newFakeUpstream(t, func(q *wire.Packet) *wire.Packet {
+		return &wire.Packet{Header: wire.Header{ID: q.Header.ID, Flags: 0x8182}, Questions: q.Questions}
+	})
+	cfg := baseCfg(srv.URL)
+	cfg.Debug = true
+	query := buildQuery(9, "www.uncacheable.example", wire.TypeA)
+
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	if _, err := Resolve(context.Background(), query, &Options{}, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "event=cache_write_error") {
+		t.Fatalf("cache_write_error not emitted: %q", buf.String())
+	}
+
+	// DEBUG off: the event stays silent.
+	resetCache()
+	cfg.Debug = false
+	buf.Reset()
+	if _, err := Resolve(context.Background(), query, &Options{}, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "cache_write_error") {
+		t.Fatal("cache_write_error emitted with DEBUG off")
 	}
 }
 
@@ -684,6 +724,7 @@ func TestResolveRuleReplaceReachesClient(t *testing.T) {
 // 不在公布网段) 只有探测能命中 — 原缺陷是 RewriteX 内部只看应答地址,
 // 探测结果永远到不了改写步.
 func TestResolveXDeterminedByClassify(t *testing.T) {
+	pool.ResetLearnedPoolsForTesting()
 	loadRanges(t)
 	run := func(t *testing.T, probeAddr string) []string {
 		t.Helper()
@@ -740,6 +781,7 @@ func TestResolveXDeterminedByClassify(t *testing.T) {
 // Pins the fix for the no-pool → cache → /admin/preferred default-pool
 // upload defect: same-scope content changes flip the key too.
 func TestResolvePoolUploadInvalidatesCacheKey(t *testing.T) {
+	pool.ResetLearnedPoolsForTesting()
 	resetCache()
 	loadRanges(t)
 	srv, hits := newFakeUpstream(t, respondWith(func(q wire.Question) []wire.Record {

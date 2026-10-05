@@ -139,11 +139,7 @@ func (s *Server) servePprof(ctx context.Context) {
 func (s *Server) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/dns-query", s.handleDoH)
-	for _, alias := range s.cfg.PathAliases {
-		if alias = strings.TrimSpace(alias); alias != "" && strings.HasPrefix(alias, "/") {
-			mux.HandleFunc(alias, s.handleDoH)
-		}
-	}
+	s.registerAliases(mux)
 	mux.HandleFunc("/explain", s.handleExplain)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -156,6 +152,31 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("/admin/health", s.admin(s.handleAdminHealth))
 	mux.HandleFunc("/admin/selfcheck", s.admin(s.handleAdminSelfcheck))
 	return s.withHostCheck(mux)
+}
+
+// builtinRoutes are the fixed patterns owned by handler; an alias colliding
+// with any of them (or with an earlier alias) is skipped with a warning
+// instead of panicking inside http.ServeMux.
+var builtinRoutes = map[string]bool{
+	"/dns-query": true, "/explain": true, "/health": true, "/probe": true,
+	"/admin/preferred": true, "/admin/site": true, "/admin/github": true,
+	"/admin/h3": true, "/admin/health": true, "/admin/selfcheck": true,
+}
+
+func (s *Server) registerAliases(mux *http.ServeMux) {
+	seen := make(map[string]bool, len(s.cfg.PathAliases))
+	for _, alias := range s.cfg.PathAliases {
+		alias = strings.TrimSpace(alias)
+		if alias == "" || !strings.HasPrefix(alias, "/") {
+			continue
+		}
+		if builtinRoutes[alias] || seen[alias] {
+			slog.Warn("event", "event", "path_alias_conflict", "detail", fmt.Sprintf("alias=%s skipped", alias))
+			continue
+		}
+		seen[alias] = true
+		mux.HandleFunc(alias, s.handleDoH)
+	}
 }
 
 // withHostCheck enforces PUBLIC_HOSTNAMES: a Host outside the set (and not
@@ -242,6 +263,25 @@ func firstHeaderIP(value string) string {
 	return first
 }
 
+// acceptsDNS checks the Accept header against the RFC 8484 media type the
+// way the baseline does: per comma-separated item, trimmed and
+// case-insensitive, either an item starts with application/dns-message or
+// an item is exactly */* (a qualified wildcard like "*/*;q=0" does not
+// allow; neither does a bare substring such as xapplication/dns-message).
+// A missing header allows everything.
+func acceptsDNS(accept string) bool {
+	if accept == "" {
+		return true
+	}
+	for _, item := range strings.Split(strings.ToLower(accept), ",") {
+		item = strings.TrimSpace(item)
+		if item == "*/*" || strings.HasPrefix(item, "application/dns-message") {
+			return true
+		}
+	}
+	return false
+}
+
 // handleDoH serves the RFC 8484 endpoint: method, Accept, Content-Type and
 // size checks, request-packet validation, request parameters, then the
 // resolver. The answer always carries the three mandated headers and the
@@ -252,9 +292,7 @@ func (s *Server) handleDoH(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if accept := r.Header.Get("Accept"); accept != "" &&
-		!strings.Contains(accept, "*/*") &&
-		!strings.Contains(accept, "application/dns-message") {
+	if !acceptsDNS(r.Header.Get("Accept")) {
 		http.Error(w, "unacceptable accept header", http.StatusNotAcceptable)
 		return
 	}

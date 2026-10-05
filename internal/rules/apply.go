@@ -74,6 +74,10 @@ func ruleMatches(rule *Rule, q, resp *wire.Packet) bool {
 	if q == nil || len(q.Questions) == 0 {
 		return false
 	}
+	if rule.Match.qtypeInvalid {
+		// a wrong-typed qtype condition never matches (refer semantics)
+		return false
+	}
 	question := q.Questions[0]
 	if len(rule.Match.QType) > 0 && !containsQType(rule.Match.QType, question.Type) {
 		return false

@@ -105,6 +105,10 @@ type shard struct {
 // Cache is a sharded LRU safe for concurrent use.
 type Cache struct {
 	shards []*shard
+	// saveMu serializes snapshot saves: the periodic and shutdown saves
+	// write the same temp path, and two unsynchronized writers would
+	// interleave into a corrupted file.
+	saveMu sync.Mutex
 }
 
 // New builds a cache with the entry capacity clamped into [128, 65536],
@@ -281,7 +285,11 @@ type snapshotEntry struct {
 }
 
 // SaveSnapshot writes all entries atomically (temp file + rename) as JSON.
+// Concurrent saves (periodic ticker racing the shutdown save) serialize on
+// saveMu so the two writers never interleave inside the temp file.
 func (c *Cache) SaveSnapshot(path string) error {
+	c.saveMu.Lock()
+	defer c.saveMu.Unlock()
 	snap := snapshotFile{Version: snapshotVersion}
 	for _, s := range c.shards {
 		s.mu.Lock()

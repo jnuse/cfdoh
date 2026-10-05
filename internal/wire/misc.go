@@ -92,8 +92,10 @@ func PatchID(packet []byte, id uint16) []byte {
 // ResponseTTL computes the cacheable TTL for a response:
 //   - SERVFAIL: 0 (never cached);
 //   - normal answers: the minimum TTL across answer records excluding OPT;
-//   - negative answers (NXDOMAIN, or empty answers with a SOA in authority):
-//     min(SOA TTL, SOA minimum, negMax);
+//   - negative answers (NXDOMAIN, or empty answers) carrying a SOA in
+//     authority: min(SOA TTL, SOA minimum, negMax); without a SOA: 0 —
+//     nothing anchors the negativity, so the answer is not cacheable
+//     (aligns the baseline);
 //   - the result is clamped into [minTTL, maxTTL]; non-positive values stay 0.
 func ResponseTTL(p *Packet, minTTL, maxTTL, negMax int) int {
 	if p.Header.RCode() == 2 {
@@ -106,7 +108,7 @@ func ResponseTTL(p *Packet, minTTL, maxTTL, negMax int) int {
 				return clampTTL(minInt(int(r.TTL), int(soa.Minimum), negMax), minTTL, maxTTL)
 			}
 		}
-		return clampTTL(negMax, minTTL, maxTTL)
+		return 0
 	}
 	minimum := -1
 	for _, r := range p.Answers {

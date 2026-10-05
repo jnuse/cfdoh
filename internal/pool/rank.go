@@ -126,9 +126,11 @@ func CombineRankings(lists [][]string, size int) []string {
 		return trimSize(out, size)
 	}
 
-	// too little agreement: interleave round-robin, skipping duplicates
+	// too little agreement: interleave round-robin, skipping duplicates and
+	// addresses whose block is already at capacity
 	var interleaved []string
 	seen := make(map[string]bool)
+	interleaveBlocks := make(map[string]int)
 	for index := 0; len(interleaved) < size; index++ {
 		progressed := false
 		for _, list := range nonEmpty {
@@ -137,12 +139,18 @@ func CombineRankings(lists [][]string, size int) []string {
 			}
 			progressed = true
 			ip := list[index]
-			if !seen[ip] {
-				seen[ip] = true
-				interleaved = append(interleaved, ip)
-				if len(interleaved) >= size {
-					break
-				}
+			if seen[ip] {
+				continue
+			}
+			seen[ip] = true
+			block := addressBlock(ip)
+			if interleaveBlocks[block] >= maxPerBlock {
+				continue
+			}
+			interleaveBlocks[block]++
+			interleaved = append(interleaved, ip)
+			if len(interleaved) >= size {
+				break
 			}
 		}
 		if !progressed {

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jnuse/cfdoh/internal/config"
@@ -321,6 +322,47 @@ func TestSnapshotMissingAndCorrupt(t *testing.T) {
 	os.WriteFile(path, []byte(`{"version":99,"entries":[]}`), 0o600)
 	if err := c.LoadSnapshot(path); err == nil {
 		t.Fatal("unknown version must error")
+	}
+}
+
+func TestSaveSnapshotConcurrentSavesSerialize(t *testing.T) {
+	// the periodic ticker and the shutdown save both target the same tmp
+	// path; unsynchronized writers interleave inside the temp file and the
+	// surviving snapshot ends up corrupt (or one rename fails on a tmp file
+	// the other already moved away). The save mutex must serialize them.
+	freeze(t)
+	c := New(4096)
+	for i := 0; i < 16; i++ {
+		q := queryPacket(uint16(i), nameOf(i), wire.TypeA)
+		id, _ := IdentityOf(q, "none", "")
+		c.Put(id, answerPacket(q, 3600, "192.0.2.1"), cfg())
+	}
+	path := filepath.Join(t.TempDir(), "snapshot.json")
+	const savers = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, savers)
+	for i := 0; i < savers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := c.SaveSnapshot(path); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent save failed: %v", err)
+	}
+	loaded := New(4096)
+	if err := loaded.LoadSnapshot(path); err != nil {
+		t.Fatalf("snapshot corrupted after concurrent saves: %v", err)
+	}
+	q := queryPacket(3, nameOf(3), wire.TypeA)
+	id, _ := IdentityOf(q, "none", "")
+	if hit := loaded.Get(id, cfg()); hit == nil || hit.State != StateFresh {
+		t.Fatalf("entry lost after concurrent saves: %+v", hit)
 	}
 }
 

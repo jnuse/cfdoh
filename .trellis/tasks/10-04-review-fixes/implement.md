@@ -39,20 +39,20 @@
 
 ## 批 5: 剩余 low + 裁决与登记 (M4, M10, L1-L6, L8-L10, I1-I8)
 
-- [ ] M4: 交错合并 perBlock 限段 (裁决 1) + pool.md 登记强于 refer
-- [ ] M10: wire.md 收编 ParseRelaxed 豁免 (裁决 2)
-- [ ] L1: SaveSnapshot 互斥
-- [ ] L2: decodeName 255/128 上限
-- [ ] L3: 无 SOA 负应答返回 0
-- [ ] L4: PRD F-004 登记 TTL 0 不可缓存
-- [ ] L5: LearnedStatus 过滤过期 source
-- [ ] L6: cache_write_error 补发射点
-- [ ] L8: Accept 逐项判定对齐 refer
-- [ ] L9: PATH_ALIASES 查重跳过
-- [ ] L10: 配置文件行上限 4MiB
-- [ ] I1: qtype 错型永不匹配 (修齐 refer)
-- [ ] I2/I3/I4/I5/I6/I7/I8: 各 spec 登记落位 (I7 措辞覆盖两族: "空池族的原记录与地址提示均原样保留", 批 3 复核提醒)
-- [ ] 批末全量: go 三连 -race + acceptance 127 例全绿 + 与修复冲突用例登记齐
+- [x] M4: 交错合并 perBlock 限段 (裁决 1) + pool.md 登记强于 refer
+- [x] M10: wire.md 收编 ParseRelaxed 豁免 (裁决 2)
+- [x] L1: SaveSnapshot 互斥
+- [x] L2: decodeName 255/128 上限
+- [x] L3: 无 SOA 负应答返回 0
+- [x] L4: PRD F-004 登记 TTL 0 不可缓存
+- [x] L5: LearnedStatus 过滤过期 source
+- [x] L6: cache_write_error 补发射点
+- [x] L8: Accept 逐项判定对齐 refer (连带登记: httpapi.md 项级 */* 较 refer 整头比对略宽的分歧句, 复核补齐)
+- [x] L9: PATH_ALIASES 查重跳过 (path_alias_conflict 事件登记 httpapi.md)
+- [x] L10: 配置文件行上限 4MiB (config.md 登记单行上限)
+- [x] I1: qtype 错型永不匹配 (修齐 refer; rules.md 登记)
+- [x] I2/I3/I4/I5/I6/I7/I8: 各 spec 登记落位 (I7 措辞覆盖两族: "空池族的原记录与地址提示均原样保留", 批 3 复核提醒)
+- [x] 批末全量: go 三连 -race + acceptance 127 例全绿 (375s) + 与修复冲突用例登记齐 (批 5 根因修复非改判: TestResolvePoolUploadInvalidatesCacheKey 顺序耦合由 M4 限段暴露, 补 ResetLearnedPoolsForTesting 消除污染残留)
 
 ## 验证命令
 

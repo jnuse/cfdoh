@@ -287,9 +287,12 @@ func readFileConfig(path string) (map[string]string, error) {
 	}
 	defer f.Close()
 	out := make(map[string]string)
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	sc := bufio.NewScanner(f)
+	// a single legitimate line (e.g. an embedded RULES_JSON of up to 1000
+	// rules) can exceed the 64KiB default token; allow up to 4MiB per line
+	sc.Buffer(make([]byte, 0, 64*1024), 4<<20)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -300,5 +303,5 @@ func readFileConfig(path string) (map[string]string, error) {
 		}
 		out[strings.TrimSpace(key)] = strings.TrimSpace(value)
 	}
-	return out, scanner.Err()
+	return out, sc.Err()
 }
