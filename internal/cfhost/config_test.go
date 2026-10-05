@@ -90,8 +90,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 	if cfg.Concurrency != 8 || cfg.Timeout != 2000 || cfg.Rounds != 3 ||
-		cfg.Hysteresis != 0.2 || cfg.FailoverRounds != 3 || cfg.Interval != 10*time.Minute ||
-		cfg.CandidateLimit != 256 || cfg.HTTPVerify {
+		cfg.Hysteresis != 0.2 || cfg.FailoverRounds != 3 || cfg.Interval != 60*time.Minute ||
+		cfg.CandidateLimit != 256 || !cfg.HTTPVerify {
 		t.Fatalf("defaults wrong: %+v", cfg)
 	}
 	if cfg.HostsPath != "/etc/hosts" {
@@ -99,6 +99,59 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if !strings.HasSuffix(cfg.StatePath, "cfhost-state.json") {
 		t.Fatalf("default state path wrong: %s", cfg.StatePath)
+	}
+}
+
+func TestLoadConfigHTTPVerifyThreeStates(t *testing.T) {
+	base := func() {
+		clearEnv(t)
+		t.Setenv("CFHOST_MANAGED_DOMAINS", "a.example.com")
+		t.Setenv("CFHOST_SOURCES", "list:1.1.1.1")
+	}
+
+	// State 1: default is on.
+	base()
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.HTTPVerify {
+		t.Fatal("http_verify must default to true")
+	}
+
+	// State 2: explicit false in the file disables it.
+	base()
+	t.Setenv("CFHOST_CONFIG", writeConfigFile(t,
+		`{"managed_domains":["a.example.com"],"sources":["list:1.1.1.1"],"http_verify":false}`))
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTPVerify {
+		t.Fatal("file http_verify=false must disable verification")
+	}
+
+	// File true keeps it on (zero-value regression guard for the pointer).
+	base()
+	t.Setenv("CFHOST_CONFIG", writeConfigFile(t,
+		`{"managed_domains":["a.example.com"],"sources":["list:1.1.1.1"],"http_verify":true}`))
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.HTTPVerify {
+		t.Fatal("file http_verify=true must keep verification on")
+	}
+
+	// State 3: explicit false via the environment disables it (env wins
+	// over a file that explicitly enables it and over the default).
+	t.Setenv("CFHOST_HTTP_VERIFY", "false")
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTPVerify {
+		t.Fatal("CFHOST_HTTP_VERIFY=false must disable verification")
 	}
 }
 

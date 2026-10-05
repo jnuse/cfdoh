@@ -75,17 +75,25 @@ func TestParseSource(t *testing.T) {
 }
 
 func TestFetchFromPool(t *testing.T) {
-	feed := `[
-		{"published":true,"isp":"national","ipv4":["1.1.1.1","1.0.0.1"],"ipv6":["2606:4700:4700::1111"]},
-		{"published":true,"isp":"chinanet","ipv4":["104.16.1.1"],"ipv6":[]},
-		{"published":false,"isp":"national","ipv4":["2.2.2.2"]},
-		{"published":true,"isp":"unicom","ipv4":["3.3.3.3"]}
-	]`
+	// Desensitized fixture mirroring the real cfhub endpoint (2026-10-05):
+	// top-level {"pools":[...]}, addresses nested in ips[].ip, unrelated
+	// extra fields (name, median_ms, votes, ...) present and ignored.
+	feed := `{
+		"pools": [
+			{"isp":"national","name":"全国","family":4,"ips":[{"ip":"1.1.1.1","median_ms":28,"votes":9},{"ip":"1.0.0.1","median_ms":31,"votes":7}],"probers":102,"users":78,"published":true},
+			{"isp":"national","name":"全国","family":6,"ips":[{"ip":"2606:4700:4700::1111","median_ms":40,"votes":5}],"probers":34,"published":true},
+			{"isp":"chinanet","name":"电信","family":4,"ips":[{"ip":"104.16.1.1","median_ms":22,"votes":4}],"published":true},
+			{"isp":"national","family":4,"ips":[{"ip":"2.2.2.2"}],"published":false},
+			{"isp":"unicom","family":4,"ips":[{"ip":"3.3.3.3"}],"published":true}
+		],
+		"quorum": {"min_probers": 3},
+		"updated_at": "2026-10-05T00:00:00Z"
+	}`
 	srv := tlsServer(t, feed, 0)
 	f := insecureFetcher()
 	ctx := context.Background()
 
-	// Default isp filter is national: v4 + v6 merged.
+	// Default isp filter is national: v4 + v6 pools merged in feed order.
 	got, err := fetchFromPool(ctx, f, srv.URL, "")
 	if err != nil {
 		t.Fatal(err)
@@ -104,6 +112,27 @@ func TestFetchFromPool(t *testing.T) {
 		t.Fatalf("chinanet pool wrong: %v", got)
 	}
 
+	// Mixed-family ips: each address is classified individually; the
+	// pool-level family field is not trusted for filtering.
+	mixed := tlsServer(t, `{"pools":[{"isp":"national","family":4,"ips":[{"ip":"104.16.9.9"},{"ip":"2606:4700::2"}],"published":true}]}`, 0)
+	got, err = fetchFromPool(ctx, f, mixed.URL, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].String() != "104.16.9.9" || got[1].String() != "2606:4700::2" {
+		t.Fatalf("mixed-family pool wrong: %v", got)
+	}
+
+	// Empty feed (no pools at all) parses fine and yields nothing.
+	empty := tlsServer(t, `{"pools":[],"quorum":{},"updated_at":""}`, 0)
+	got, err = fetchFromPool(ctx, f, empty.URL, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("empty feed should yield no addresses: %v", got)
+	}
+
 	// http scheme rejected.
 	if _, err := fetchFromPool(ctx, f, "http://"+stripScheme(t, srv.URL), ""); err == nil {
 		t.Fatal("http pool url must be rejected")
@@ -113,6 +142,12 @@ func TestFetchFromPool(t *testing.T) {
 	bad := tlsServer(t, "boom", http.StatusInternalServerError)
 	if _, err := fetchFromPool(ctx, f, bad.URL, ""); err == nil {
 		t.Fatal("non-2xx pool response must fail")
+	}
+
+	// The old assumed shape (bare array) must fail loudly, not parse empty.
+	legacy := tlsServer(t, `[{"published":true,"isp":"national","ipv4":["1.1.1.1"]}]`, 0)
+	if _, err := fetchFromPool(ctx, f, legacy.URL, ""); err == nil {
+		t.Fatal("bare-array feed must fail to parse")
 	}
 }
 
@@ -151,9 +186,10 @@ func TestFetchFromAPI(t *testing.T) {
 }
 
 func TestFetchCandidatesMergeFilterDedupLimit(t *testing.T) {
-	pool := tlsServer(t, `[
-		{"published":true,"isp":"national","ipv4":["1.1.1.1","104.16.3.3"],"ipv6":["2606:4700::1"]}
-	]`, 0)
+	pool := tlsServer(t, `{"pools":[
+		{"isp":"national","family":4,"ips":[{"ip":"1.1.1.1"},{"ip":"104.16.3.3"}],"published":true},
+		{"isp":"national","family":6,"ips":[{"ip":"2606:4700::1"}],"published":true}
+	]}`, 0)
 	sources := []string{
 		"pool:" + pool.URL,
 		"list:1.1.1.1,10.0.0.7,127.0.0.1,192.168.1.4,169.254.1.1,::1,fe80::1,0.0.0.0,224.0.0.1,104.16.3.3",
@@ -186,7 +222,7 @@ func TestFetchCandidatesMergeFilterDedupLimit(t *testing.T) {
 }
 
 func TestFetchCandidatesToleratesFailingSources(t *testing.T) {
-	pool := tlsServer(t, `[{"published":true,"isp":"national","ipv4":["1.1.1.1"]}]`, 0)
+	pool := tlsServer(t, `{"pools":[{"isp":"national","family":4,"ips":[{"ip":"1.1.1.1"}],"published":true}]}`, 0)
 	sources := []string{
 		"pool:" + pool.URL,                           // good
 		"list:not-an-ip,alsonotip",                   // parses but zero valid -> failed

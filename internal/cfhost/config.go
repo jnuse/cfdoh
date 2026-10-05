@@ -39,8 +39,9 @@ const (
 	defaultRounds         = 3
 	defaultHysteresis     = 0.2
 	defaultFailoverRounds = 3
-	defaultInterval       = 10 * time.Minute
+	defaultInterval       = 60 * time.Minute
 	defaultCandidateLimit = 256
+	defaultHTTPVerify     = true
 
 	minConcurrency = 1
 	maxConcurrency = 64
@@ -57,8 +58,8 @@ const (
 )
 
 // fileConfig is the on-disk JSON shape (snake_case keys). Zero values mean
-// "not set, keep default"; Hysteresis is a pointer because 0 is a legal
-// explicit value.
+// "not set, keep default"; Hysteresis and HTTPVerify are pointers because
+// 0 / false are legal explicit values.
 type fileConfig struct {
 	ManagedDomains []string `json:"managed_domains"`
 	Sources        []string `json:"sources"`
@@ -71,7 +72,7 @@ type fileConfig struct {
 	HostsPath      string   `json:"hosts_path"`
 	StatePath      string   `json:"state_path"`
 	CandidateLimit int      `json:"candidate_limit"`
-	HTTPVerify     bool     `json:"http_verify"`
+	HTTPVerify     *bool    `json:"http_verify"`
 }
 
 func (fc *fileConfig) applyTo(cfg *Config) {
@@ -108,8 +109,8 @@ func (fc *fileConfig) applyTo(cfg *Config) {
 	if fc.CandidateLimit != 0 {
 		cfg.CandidateLimit = fc.CandidateLimit
 	}
-	if fc.HTTPVerify {
-		cfg.HTTPVerify = true
+	if fc.HTTPVerify != nil {
+		cfg.HTTPVerify = *fc.HTTPVerify
 	}
 }
 
@@ -152,6 +153,7 @@ func LoadConfig() (*Config, error) {
 		HostsPath:      defaultHostsPath(),
 		StatePath:      defaultStatePath(path),
 		CandidateLimit: defaultCandidateLimit,
+		HTTPVerify:     defaultHTTPVerify,
 	}
 	if data, err := os.ReadFile(path); err == nil {
 		var fc fileConfig

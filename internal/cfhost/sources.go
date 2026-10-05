@@ -17,7 +17,8 @@ import (
 
 // Candidate source forms (pinned by the task spec):
 //
-//	pool:<url>[#<isp>]  public pool API (cfhub-shaped JSON array)
+//	pool:<url>[#<isp>]  public pool API (cfhub-shaped JSON: top-level
+//	                     {"pools":[{isp,family,ips:[{ip}],published}]})
 //	domain:<name>       system DNS A lookup for <name>
 //	list:<ip,ip,...>    static list
 //	https://...         generic remote API: one IP per line, or a JSON string array
@@ -91,12 +92,23 @@ func parseSource(s string) (sourceSpec, bool) {
 	return sourceSpec{}, false
 }
 
-// poolFeedEntry mirrors one element of the public pool API JSON array.
+// poolFeedDoc mirrors the public pool API JSON (cfhub shape): a top-level
+// object wrapping pools; each pool carries its addresses nested in
+// ips[].ip. Same shape as hubfeed's feedDoc (the server-side consumer of
+// the same endpoint).
+type poolFeedDoc struct {
+	Pools []poolFeedEntry `json:"pools"`
+}
+
 type poolFeedEntry struct {
-	Published bool     `json:"published"`
 	ISP       string   `json:"isp"`
-	IPv4      []string `json:"ipv4"`
-	IPv6      []string `json:"ipv6"`
+	Family    int      `json:"family"`
+	IPs       []feedIP `json:"ips"`
+	Published bool     `json:"published"`
+}
+
+type feedIP struct {
+	IP string `json:"ip"`
 }
 
 // fetchCandidates pulls all sources, keeps only public unicast addresses,
@@ -174,7 +186,7 @@ func fetchFromPool(ctx context.Context, f *fetcher, rawURL, wantISP string) ([]n
 	if err != nil {
 		return nil, err
 	}
-	var feed []poolFeedEntry
+	var feed poolFeedDoc
 	if err := json.Unmarshal(body, &feed); err != nil {
 		return nil, fmt.Errorf("pool feed: %w", err)
 	}
@@ -182,17 +194,14 @@ func fetchFromPool(ctx context.Context, f *fetcher, rawURL, wantISP string) ([]n
 		wantISP = "national"
 	}
 	var out []netip.Addr
-	for _, e := range feed {
+	for _, e := range feed.Pools {
 		if !e.Published || e.ISP != wantISP {
 			continue
 		}
-		for _, s := range e.IPv4 {
-			if a, err := netip.ParseAddr(strings.TrimSpace(s)); err == nil {
-				out = append(out, a)
-			}
-		}
-		for _, s := range e.IPv6 {
-			if a, err := netip.ParseAddr(strings.TrimSpace(s)); err == nil {
+		// Family is classified per address (a pool's ips array may mix
+		// families); the pool-level family field is not trusted.
+		for _, item := range e.IPs {
+			if a, err := netip.ParseAddr(strings.TrimSpace(item.IP)); err == nil {
 				out = append(out, a)
 			}
 		}

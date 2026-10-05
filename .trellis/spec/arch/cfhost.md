@@ -1,8 +1,8 @@
 # cfhost
 
 业务逻辑:
-- 主循环一轮: 拉取候选 (多源合并去重, 仅公网单播; 源含公开池 API, 优选域名, 静态列表) → 本地测速 (对 443 端口 TCP+TLS 握手计时, SNI 用管辖域名之一, 多轮取中位, 失败淘汰, 可选 HTTP 端到端验证) → 滞回判定 → hosts 区块更新. next_run 缺失或过期 (如状态落盘失败) 时按配置周期兜底休眠, 轮询不坍缩为连续重试.
-- 候选源四形态语法: `pool:<url>[#<isp>]` (公开池 API, 只取 published 且 isp 匹配, 缺省 national), `domain:<域名>` (系统 DNS 解析 A), `list:<ip,...>` (静态), 其余 `https://...` (通用远程 API, 每行一个 IP 的文本或 JSON 字符串数组). 远程源仅接受 https 且走系统证书校验; 重定向仅限 https 目标 (含 10 跳上限), 降级跳转拒绝跟随.
+- 主循环一轮: 拉取候选 (多源合并去重, 仅公网单播; 源含公开池 API, 优选域名, 静态列表) → 本地测速 (对 443 端口 TCP+TLS 握手计时, SNI 用管辖域名之一, 多轮取中位, 失败淘汰, 默认开启可关闭的 HTTP 端到端验证) → 滞回判定 → hosts 区块更新. next_run 缺失或过期 (如状态落盘失败) 时按配置周期兜底休眠, 轮询不坍缩为连续重试.
+- 候选源四形态语法: `pool:<url>[#<isp>]` (公开池 API, cfhub 形 JSON 对象 `{"pools":[{isp,family,ips:[{ip}],published}]}`, 地址在 ips[].ip 嵌套, 只取 published 且 isp 匹配, 缺省 national, 地址族按地址本身逐个判定), `domain:<域名>` (系统 DNS 解析 A), `list:<ip,...>` (静态), 其余 `https://...` (通用远程 API, 每行一个 IP 的文本或 JSON 字符串数组). 远程源仅接受 https 且走系统证书校验; 重定向仅限 https 目标 (含 10 跳上限), 降级跳转拒绝跟随.
 - 状态文件默认路径 os.UserConfigDir()/cfdoh/cfhost-state.json, 领域含在用 v4/v6, 上轮摘要, 下次刷新时刻, 连续失败计数与上轮候选; 单实例锁文件 cfhost.lock (含 PID, O_EXCL 原子创建, 并发启动仅一实例持锁; 活实例拒绝, 死实例覆盖) 同目录, 仅常驻模式持有.
 - 测速全部失败时保留 hosts 现状不动.
 - hosts 区块带标记 (# BEGIN cfhost 至 # END cfhost), 区块外逐字节保留; 原子更新; 最优地址未变化不重写; 更新后刷新系统 DNS 缓存. hosts 读取的瞬时错误 (如安全软件短暂锁定) 记告警并按本轮跳过: 不写 hosts, 在用地址与失败计数保持不变, 下周期重试, 守护不退出.
@@ -37,7 +37,8 @@ func Status() string
 CFHOST_CONFIG, 未设时默认为可执行文件同目录的 cfhost.json (可携式布局;
 exe 路径不可得时回退 UserConfigDir/cfdoh/cfhost.json). 状态文件, 单实例锁
 与 cfhost.log 跟随配置文件所在目录 (CFHOST_STATE_PATH 可单独覆盖状态, 锁
-与日志随状态). 文件为 snake_case 键, 零值表示未设 (hysteresis 除外, 0 是合法显式值).
+与日志随状态). 文件为 snake_case 键, 零值表示未设 (hysteresis 与
+http_verify 除外, 0 与 false 是合法显式值).
 
 | 环境变量 | 文件键 | 语义 | 默认 | 钳制/备注 |
 |---|---|---|---|---|
@@ -48,11 +49,11 @@ exe 路径不可得时回退 UserConfigDir/cfdoh/cfhost.json). 状态文件, 单
 | CFHOST_ROUNDS | rounds | 采样轮数 | 3 | 1–10 |
 | CFHOST_HYSTERESIS | hysteresis | 滞回比例 | 0.2 | 0.0–0.9 |
 | CFHOST_FAILOVER_ROUNDS | failover_rounds | 在用地址连续失效强制重选轮数 | 3 | 1–100 |
-| CFHOST_INTERVAL_MIN | interval_min | 轮询周期 (分钟整数) | 10min | 钳 1min–24h; 唯一周期通道, 无亚分钟表达 |
+| CFHOST_INTERVAL_MIN | interval_min | 轮询周期 (分钟整数) | 60min | 钳 1min–24h; 唯一周期通道, 无亚分钟表达 |
 | CFHOST_HOSTS_PATH | hosts_path | hosts 路径 | 系统标准路径 (Windows: System32/drivers/etc/hosts; 其余: /etc/hosts) | — |
 | CFHOST_STATE_PATH | state_path | 状态文件路径 | 配置文件所在目录 cfhost-state.json | 锁与日志随状态目录 |
 | CFHOST_CANDIDATE_LIMIT | candidate_limit | 候选数量上限 | 256 | ≤ 0 回默认; 无上限钳 |
-| CFHOST_HTTP_VERIFY | http_verify | 测速 HTTP 端到端验证 (/cdn-cgi/trace) | false | 仅 true 为真 |
+| CFHOST_HTTP_VERIFY | http_verify | 测速 HTTP 端到端验证 (/cdn-cgi/trace) | true | 指针字段, 文件或环境变量显式 false 关闭 |
 
 钳制动作记 "clamped" 日志; 非法数值环境变量直接报错退出 (与服务端回退默认不同). 重启生效, 不做热重载.
 
