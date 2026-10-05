@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/arch/cfhost.md", "reason": "cfhost 模块契约: 主循环, 接口签名, hosts 区块与事件, 真源"}
-{"file": ".trellis/spec/arch/client-entry.md", "reason": "客户端入口契约: 子命令分发薄壳"}
-{"file": ".trellis/spec/prd/requirements.md", "reason": "只看 F-023 至 F-027 五节 (候选拉取/测速选优/hosts 管理/服务化/配置)"}

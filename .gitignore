@@ -16,3 +16,7 @@ __pycache__/
 
 # 测试 CA 私钥 (仅本地再次签发用, 不提交; ca.pem/server.pem/server.key 提交)
 /test/acceptance/fixtures/ca.key
+.trellis/
+.agents/
+.pi/
+AGENTS.md

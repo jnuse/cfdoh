@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/prd/requirements.md", "reason": "逐项验收标准对照"}
-{"file": ".trellis/spec/arch/modules.md", "reason": "模块路径与依赖合规检查"}
-{"file": ".trellis/spec/cdd/terms.md", "reason": "命名与术语一致性检查"}
