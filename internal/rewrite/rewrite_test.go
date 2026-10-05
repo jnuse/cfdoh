@@ -766,7 +766,11 @@ func TestInjectConfigured(t *testing.T) {
 }
 
 func TestFlatten(t *testing.T) {
-	t.Run("chain records move to query name", func(t *testing.T) {
+	// I7 改判 (2026-10-05): 归名时删除链上全部 CNAME, 消除 qname CNAME +
+	// qname A 同名并存的非法应答 (RFC 1034; 对齐 refer flattenAliases).
+	// 交付项 2: 删除判定扩为并存式 — qname CNAME 与 qname 非 CNAME 记录
+	// 并存即删 (钉住补造产物同样触发), 不依赖归名路径.
+	t.Run("chain records move to query name, cname drops", func(t *testing.T) {
 		resp := &wire.Packet{
 			Header:    wire.Header{ID: 5, Flags: 0x8180},
 			Questions: []wire.Question{{Name: "www.example.com", Type: wire.TypeA, Class: wire.ClassIN}},
@@ -778,16 +782,19 @@ func TestFlatten(t *testing.T) {
 			},
 		}
 		out := Flatten(resp)
-		if out.Answers[0].Type != wire.TypeCNAME || out.Answers[0].Name != "www.example.com" {
-			t.Fatalf("leading CNAME = %+v, want preserved", out.Answers[0])
+		if len(out.Answers) != 3 {
+			t.Fatalf("answers = %d records, want 3 (CNAME dropped)", len(out.Answers))
 		}
-		for _, r := range out.Answers[1:] {
-			if r.Name != "www.example.com" {
+		for _, r := range out.Answers {
+			if r.Type == wire.TypeCNAME {
+				t.Fatalf("chain CNAME residue: %+v", r)
+			}
+			if wire.CanonicalName(r.Name) != "www.example.com" {
 				t.Fatalf("record %q still owned by %q", wire.CanonicalName(r.Name), r.Name)
 			}
 		}
 	})
-	t.Run("multi-hop chain keeps cname links", func(t *testing.T) {
+	t.Run("multi-hop chain drops every cname", func(t *testing.T) {
 		resp := &wire.Packet{
 			Questions: []wire.Question{{Name: "www.example.com", Type: wire.TypeA, Class: wire.ClassIN}},
 			Answers: []wire.Record{
@@ -797,11 +804,46 @@ func TestFlatten(t *testing.T) {
 			},
 		}
 		out := Flatten(resp)
-		if out.Answers[1].Type == wire.TypeCNAME && out.Answers[1].Name != "a.example.net" {
-			t.Fatalf("chain CNAME renamed to %q", out.Answers[1].Name)
+		if len(out.Answers) != 1 {
+			t.Fatalf("answers = %d records, want 1 (chain CNAMEs dropped): %+v", len(out.Answers), out.Answers)
 		}
-		if out.Answers[2].Name != "www.example.com" {
-			t.Fatalf("terminal record owner = %q, want query name", out.Answers[2].Name)
+		if out.Answers[0].Type != wire.TypeA || wire.CanonicalName(out.Answers[0].Name) != "www.example.com" {
+			t.Fatalf("terminal record = %+v, want A owned by query name", out.Answers[0])
+		}
+	})
+	t.Run("pinned synthesis drops cname without rename", func(t *testing.T) {
+		// PinAddresses 对全 CNAME 应答在 qname 下补造 A, 补造产物已挂
+		// 查询名 — 并存判定 (非归名路径) 同样删除链上 CNAME.
+		resp := &wire.Packet{
+			Questions: []wire.Question{{Name: "www.example.com", Type: wire.TypeA, Class: wire.ClassIN}},
+			Answers: []wire.Record{
+				cnameRec("www.example.com", "a.example.net", 300),
+				cnameRec("a.example.net", "b.example.net", 300),
+				aRec("www.example.com", "203.0.113.7", 60),
+				aRec("www.example.com", "203.0.113.8", 60),
+			},
+		}
+		out := Flatten(resp)
+		if len(out.Answers) != 2 {
+			t.Fatalf("answers = %d records, want 2 (chain CNAMEs dropped): %+v", len(out.Answers), out.Answers)
+		}
+		for _, r := range out.Answers {
+			if r.Type != wire.TypeA || wire.CanonicalName(r.Name) != "www.example.com" {
+				t.Fatalf("pinned record residue: %+v", r)
+			}
+		}
+	})
+	t.Run("all-cname answer untouched", func(t *testing.T) {
+		resp := &wire.Packet{
+			Questions: []wire.Question{{Name: "www.example.com", Type: wire.TypeA, Class: wire.ClassIN}},
+			Answers: []wire.Record{
+				cnameRec("www.example.com", "a.example.net", 300),
+				cnameRec("a.example.net", "b.example.net", 300),
+			},
+		}
+		out := Flatten(resp)
+		if len(out.Answers) != 2 || out.Answers[0].Type != wire.TypeCNAME || out.Answers[1].Type != wire.TypeCNAME {
+			t.Fatalf("answers = %+v, want untouched all-CNAME chain", out.Answers)
 		}
 	})
 	t.Run("no cname untouched", func(t *testing.T) {
@@ -824,6 +866,19 @@ func TestFlatten(t *testing.T) {
 		out := Flatten(resp)
 		if out.Answers[1].Name != "alias.example.net" {
 			t.Fatalf("unrelated CNAME renamed to %q", out.Answers[1].Name)
+		}
+	})
+	t.Run("leading cname owned by other name untouched", func(t *testing.T) {
+		resp := &wire.Packet{
+			Questions: []wire.Question{{Name: "www.example.com", Type: wire.TypeA, Class: wire.ClassIN}},
+			Answers: []wire.Record{
+				cnameRec("alias.example.net", "edge.example.net", 300),
+				aRec("edge.example.net", "104.16.1.1", 60),
+			},
+		}
+		out := Flatten(resp)
+		if len(out.Answers) != 2 || out.Answers[0].Type != wire.TypeCNAME || out.Answers[1].Name != "edge.example.net" {
+			t.Fatalf("answers = %+v, want untouched (first CNAME not query-owned)", out.Answers)
 		}
 	})
 }

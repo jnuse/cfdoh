@@ -231,7 +231,7 @@ cfdoh 的行为级需求: 每项功能的用户故事从 background.md 推导, �
 用户故事: 作为 Chromium 用户, 我希望 A/AAAA 与 HTTPS 记录挂在同一个名字下, 以便 ECH 生效.
 
 业务规则:
-- 对 ECH 主机 (按上游地址判定为 Cloudflare, Meta 域名, ECH_DOMAINS) 的 A/AAAA/HTTPS 应答, 把 CNAME 链上的记录移到查询名下
+- 对 ECH 主机 (按上游地址判定为 Cloudflare, Meta 域名, ECH_DOMAINS) 的 A/AAAA/HTTPS 应答, 把 CNAME 链上的记录移到查询名下, 并删除链上全部 CNAME (RFC 1034: CNAME 不与其他类型同名并存; 对齐 Cloudflare CNAME Flattening)
 - 判定用上游原始地址: 改写后的优选地址不必落在 Cloudflare 公布网段内
 - 非 ECH 主机不改
 

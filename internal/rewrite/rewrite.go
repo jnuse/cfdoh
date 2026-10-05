@@ -466,8 +466,14 @@ func InjectConfigured(resp *wire.Packet, cfg *config.Config) *wire.Packet {
 
 // Flatten moves the records riding a CNAME chain under the query name: when
 // the answer starts with a query-name CNAME, every later non-CNAME record is
-// re-owned by the query name so A/AAAA and HTTPS share one owner. The CNAME
-// records keep their place; anything else is returned untouched.
+// re-owned by the query name so A/AAAA and HTTPS share one owner. The drop
+// verdict is coexistence, not the rename itself: a qname CNAME beside any
+// qname-owned non-CNAME record — renamed chain records or the pinned block
+// PinAddresses synthesizes under the query name — is an illegal answer RFC
+// 1034 forbids and strict resolvers reject, so the chain's CNAME records
+// drop (对齐 refer flattenAliases 与 Cloudflare CNAME Flattening). An
+// answer with no qname-owned non-CNAME record — a pure CNAME chain — is
+// returned untouched.
 func Flatten(resp *wire.Packet) *wire.Packet {
 	if resp == nil || len(resp.Questions) == 0 || len(resp.Answers) < 2 {
 		return resp
@@ -480,20 +486,23 @@ func Flatten(resp *wire.Packet) *wire.Packet {
 		return resp
 	}
 	answers := cloneAnswers(resp)
-	changed := false
+	// After the loop every non-CNAME record is qname-owned (renamed when
+	// needed), so coexist is exactly the qname-CNAME-plus-qname-record
+	// coexistence the leading gate already established.
+	coexist := false
 	for i := 1; i < len(answers); i++ {
 		if answers[i].Type == wire.TypeCNAME {
 			continue
 		}
 		if wire.CanonicalName(answers[i].Name) != wire.CanonicalName(qname) {
 			answers[i].Name = qname
-			changed = true
 		}
+		coexist = true
 	}
-	if !changed {
+	if !coexist {
 		return resp
 	}
-	resp.Answers = answers
+	resp.Answers = dropType(answers, wire.TypeCNAME)
 	return resp
 }
 

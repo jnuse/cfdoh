@@ -6,7 +6,7 @@
 - CF_DROP_AAAA 开启时, 经通用改写的应答去除网段内的 AAAA 记录并同步移除 HTTPS 记录的 ipv6hint (X 改写去除全部 AAAA 与 ipv6hint); 非改写应答不受影响.
 - 钉住: 站点池与 GitHub 池的主机强制为池地址并去 IPv6, 不经优选池选择.
 - 注入: ECH 配置写入 HTTPS 记录 ech 参数, ALPN 按 h3 门控; 上游无 HTTPS 记录时补造一条.
-- 展平: CNAME 链上的记录移到查询名下, 判定用上游原始地址 (优选地址不必落网段). 边界: 链上 CNAME 记录保留 (refer 删除); 移动记录不按别名 TTL 封顶; 要求首条记录为查询名持有的 CNAME, 其后的非 CNAME 记录无条件归名到查询名 (refer 仅沿链改名; 主流应答形态结果等价).
+- 展平: CNAME 链上的记录移到查询名下, 判定用上游原始地址 (优选地址不必落网段). 边界: 删除判定用并存式 — 存在 qname CNAME 且应答含 qname 非 CNAME 记录 (归名产物与钉住补造产物同样触发) 时删除链上全部 CNAME (对齐 refer flattenAliases 与 Cloudflare CNAME Flattening; RFC 1034 禁止 CNAME 与其他类型同名并存); 移动记录不按别名 TTL 封顶; 要求首条记录为查询名持有的 CNAME, 其后的非 CNAME 记录无条件归名到查询名 (refer 仅沿链改名); 无并存 (全 CNAME, 或 CNAME 属其他 owner) 时保持原样.
 
 对外接口:
 
