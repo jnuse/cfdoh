@@ -39,3 +39,42 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build image
         run: docker build -t cfdoh:ci .
+
+  # Auto-prune run history: keep the newest 3 runs per workflow (ci + release).
+  # Push-only: fork PR tokens lack actions:write, so PR runs skip cleanup.
+  # Deleting runs never touches release objects or their assets.
+  # Job-level permissions replace the top-level set for this job only.
+  cleanup-runs:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Prune old workflow runs (keep newest 3)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          for wf in ci.yml release.yml; do
+            echo "==> ${wf}"
+            if ! runs="$(gh api --paginate \
+                 "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}/runs?per_page=100" \
+                 --jq '.workflow_runs[].id')"; then
+              echo "WARN: failed to list runs for ${wf}, skipping"
+              continue
+            fi
+            if [ -z "$runs" ]; then
+              echo "no runs, nothing to do"
+              continue
+            fi
+            echo "keep (newest 3): $(echo "$runs" | head -n 3 | tr '\n' ' ')"
+            # Listing is created-desc (newest first); delete past the newest 3.
+            echo "$runs" | tail -n +4 | while read -r id; do
+              echo "deleting run ${id}"
+              if gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/runs/${id}"; then
+                echo "deleted run ${id}"
+              else
+                echo "WARN: failed to delete run ${id}, skipping"
+              fi
+            done
+          done
