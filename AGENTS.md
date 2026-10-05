@@ -26,6 +26,6 @@ Run this before your first substantive reply in a session:
 
 Files are the source of truth; conversation memory is not. Do not answer, plan, or edit from what a previous session may have said — re-read the files.
 
-Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
+Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten when copying template updates in — merge local edits by hand.
 
 <!-- TRELLIS:END -->

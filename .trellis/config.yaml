@@ -55,8 +55,7 @@ max_journal_lines: 2000
 #-------------------------------------------------------------------------------
 
 # Declare packages for monorepo projects.
-# Trellis auto-detects workspaces during `trellis init`, but you can also
-# configure them manually here.
+# Configure them manually here.
 #
 # packages:
 #   frontend:
@@ -123,8 +122,7 @@ channel:
 # unless you pin one. To use a cheaper/faster model for implement/check/
 # research sub-agent work, edit `model` / `model_reasoning_effort` directly
 # on the generated `.codex/agents/trellis-*.toml` files (see the commented
-# hint lines in those files) — there is no config.yaml knob for this,
-# `trellis update` preserves your edits across regeneration.
+# hint lines in those files) — there is no config.yaml knob for this.
 #
 # codex:
 #   dispatch_mode: auto  # or "inline"; legacy alias: "sub-agent"

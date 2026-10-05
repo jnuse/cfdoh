@@ -141,8 +141,8 @@ python3 ./.trellis/scripts/get_context.py --mode phase --step <X.Y>  # detailed 
   Editing checklist:
     - When you change a [workflow-state:STATUS] block, also check the
       matching phase's `[required · once]` walkthrough steps for sync
-    - Run `trellis update` after editing to push the new bodies to
-      downstream user projects (block-level managed replacement)
+    - After editing, restart the AI session so the extension re-reads
+      workflow.md (no script changes required)
 -->
 
 ## Phase Index
