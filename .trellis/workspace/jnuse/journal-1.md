@@ -106,3 +106,26 @@
 ### Status
 
 [OK] **Completed**
+
+---
+
+## Session 5: cfhost hosts 写入韧性 (TEMP 优先 + rename 重试)
+
+**Date**: 2026-10-05
+**Task**: 10-05-cfhost-hosts-write
+**Branch**: `main`
+
+### Summary
+
+菜包机器实测发现 Windows 杀软 (Defender/火绒过滤驱动) 对 System32\drivers\etc 目录新建文件的扫描句柄与 cfhost 毫秒级 CreateTemp→rename 竞态, rename 稳定 Access denied; 且写失败传播为致命错误导致 RunLoop 退出, 服务当日被杀两次 (SCM 无恢复, 永久停摆). 菜包拍板: tmp 优先写系统 TEMP 少过 etc 杀软闸 (知知原方案同目录+重试被推翻); 知知补工程配套: 跨卷回退同目录保原子性, rename 锁类错误 200ms×5 退避重试, 耗尽按本轮跳过守护不死. check 抓出 syscall.ERROR_SHARING_VIOLATION 不存在的交叉编译错误 (改 x/sys/windows), 补 GOOS=windows 构建进验证. spec cfhost.md 与 PRD F-025 同步. 待菜包发 v1.2.2.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5bc84c2` | fix: cfhost hosts write resilience with temp-first staging and rename retry |
+| `2b28644` | chore(task): archive 10-05-cfhost-hosts-write |
+
+### Status
+
+[OK] **Completed**
