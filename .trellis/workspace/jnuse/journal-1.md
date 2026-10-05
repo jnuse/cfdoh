@@ -129,3 +129,26 @@
 ### Status
 
 [OK] **Completed**
+
+---
+
+## Session 6: 展平删除链上 CNAME (非法应答修复)
+
+**Date**: 2026-10-05
+**Task**: 10-05-flatten-cname-drop
+**Branch**: `main`
+
+### Summary
+
+菜包实测 www.runoob.com (CF 站 + 上游 CNAME 首位形态) 经服务解析后浏览器拒收 ("找不到服务器 IP 地址"), 关 DoH 可访问 → 定位 rewrite.Flatten 归名后保留链上 CNAME 产出 RFC 1034 非法同名并存 (审查 I7 曾登记 "CNAME 保留" 且误判等价, 本次推翻并落 note). 修法: 删除判定为并存式 (qname CNAME 与 qname 非 CNAME 记录并存即删, 归名与钉住补造两路径同覆盖), 对齐 refer flattenAliases 与 Cloudflare CNAME Flattening. 两个交付项各经 implement→check 复核 (overlay 探针实证旧代码下新测试红), 17 例 acceptance 绿. I7 推翻 note 落档. 待与 hosts 写韧性同批发 v1.2.2.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `34ea8c7` | fix: flatten drops chain cnames to keep answers rfc-legal |
+| `1055f44` | chore(task): archive 10-05-flatten-cname-drop, note i7 overturn |
+
+### Status
+
+[OK] **Completed**
