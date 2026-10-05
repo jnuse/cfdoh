@@ -83,3 +83,26 @@
 ### Status
 
 [OK] **Completed**
+
+---
+
+## Session 4: cfhost pool 源格式修复与默认值调整
+
+**Date**: 2026-10-05
+**Task**: 10-05-cfhost-pool-feed
+**Branch**: `main`
+
+### Summary
+
+菜包机器实测发现 v1.2.0 cfhost pool 源对 cfhub 真实格式完全不匹配 ({"pools":[{isp,family,ips:[{ip}],published}]} vs 假想的裸数组+顶层 ipv4/ipv6), 公开池候选全部丢失. 修复: 解析对齐 hubfeed 同构 feedDoc, 过滤语义保留, 真实格式脱敏 fixture 钉住, 真实端点实测 8 候选. 同任务两默认值拍板变更: http_verify 默认开 (文件键改 *bool 指针支持显式关, env>file>default 优先级钉住), 轮询默认 10min→60min (对齐 cfhub 探针 1h 出数节奏, 代价: 滞回发现延迟最长 1h, 失效强制切换最长 3h). PRD F-024/F-026 与 cfhost.md 同步. 待菜包拍板发 v1.2.1.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7e7366a` | fix: cfhost pool feed format, default http verify and hourly interval |
+| `f2b3730` | chore(task): archive 10-05-cfhost-pool-feed |
+
+### Status
+
+[OK] **Completed**
