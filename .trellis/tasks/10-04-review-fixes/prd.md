@@ -67,13 +67,13 @@
 
 ## Acceptance Criteria
 
-- [ ] H1/H2 修复且各有回归测试: TestAdminHealth 单跑绿 (无顺序依赖); 服务模式可经 "run" 参数进入
-- [ ] 11 条 medium 全修, 每条有 Go 单测钉住修复行为
-- [ ] 15 条 low 按方向修齐; L4 与 info 类登记落入对应 spec (wire.md, rewrite.md, rules.md, pool.md, h3.md, httpapi.md, config.md, cfhost.md, prd F-004)
-- [ ] 与修复冲突的既有测试改判并说明 (逐条在 implement.md 勾选时登记)
-- [ ] go build ./... && go vet ./... && go test -race ./... 全绿
-- [ ] python3 -m unittest discover -s test/acceptance 127 例全绿 (用例与修复冲突时修用例并登记, 语义以修复后 spec 为准)
-- [ ] M4/M10 裁决落 spec: pool.md 登记限段强于 refer; wire.md 收编 ParseRelaxed 豁免
+- [x] H1/H2 修复且各有回归测试: TestAdminHealth 单跑绿 (无顺序依赖); 服务模式可经 "run" 参数进入
+- [x] 11 条 medium 全修, 每条有 Go 单测钉住修复行为
+- [x] 15 条 low 按方向修齐; L4 与 info 类登记落入对应 spec (wire.md, rewrite.md, rules.md, pool.md, h3.md, httpapi.md, config.md, cfhost.md, prd F-004)
+- [x] 与修复冲突的既有测试改判并说明 (逐条在 implement.md 勾选时登记)
+- [x] go build ./... && go vet ./... && go test -race ./... 全绿
+- [x] python3 -m unittest discover -s test/acceptance 127 例全绿 (用例与修复冲突时修用例并登记, 语义以修复后 spec 为准)
+- [x] M4/M10 裁决落 spec: pool.md 登记限段强于 refer; wire.md 收编 ParseRelaxed 豁免
 
 ## Constraints
 

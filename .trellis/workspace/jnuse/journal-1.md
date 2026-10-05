@@ -57,3 +57,29 @@
 ### Status
 
 [OK] **Completed**
+
+---
+
+## Session 3: 全仓审查修复 37 条五批收口
+
+**Date**: 2026-10-05
+**Task**: 10-04-review-fixes
+**Branch**: `main`
+
+### Summary
+
+37 条审查发现五批全修: H1/H2 (admin health nil 契约 + Windows 服务 run 入口), M1-M11 (ContentTag 键排序, ech 缓存上限 256, Status 锁内复查, 交错限段, isp mapped CIDR, ECS 回退, classify 门控 X, PinAddresses 回退补造, 逐记录网段过滤, ParseRelaxed 登记收编, cfhost 域名规范化), L1-L15, I1-I9 (修齐或登记). 三条裁决落 spec + note: 交错限段强于 refer (M4), ParseRelaxed 仅上游四面豁免 (M10), low-info 对齐原则 (L4 登记偏差). 改判登记 3 处 (批 1 state_test 空态断言, 批 3 rewrite_test 两处旧缺陷钉子), 根因修复 1 处 (M4 限段暴露 resolver 测试学习池顺序污染 → ResetLearnedPoolsForTesting). 每批 trellis-implement → 主会话复验 → trellis-check 复核 → 勾选 → commit. 终态: go 三连 -race 绿, acceptance 127 例全绿, verify_spec 32 文档合规, notes verify 7 条过.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `16ee173` | fix: admin health nil contract and windows service run entry (batch 1) |
+| `6505492` | fix: content tag ordering, ech cache cap, status race, isp and ecs fallbacks (batch 2) |
+| `e5fd2e0` | fix: classify-gated x rewrite, pin fallback synthesis, per-record filtering (batch 3) |
+| `5465224` | fix: cfhost domain normalization, lock, rotation, loop and redirect hardening (batch 4) |
+| `37e3852` | fix: interleave block cap, wire name limits, negative ttl, rules and alias hardening with spec registrations (batch 5) |
+
+### Status
+
+[OK] **Completed**
