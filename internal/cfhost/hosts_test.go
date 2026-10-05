@@ -17,6 +17,55 @@ var (
 	v6 = netip.MustParseAddr("2606:4700::1111")
 )
 
+// errFakeLock stands in for a Windows access-denied / sharing-violation
+// rename failure caused by an antivirus scan handle.
+var errFakeLock = errors.New("fake antivirus lock")
+
+// withHostsSeams overrides the hosts write seams (temp dir, same-volume
+// decision, rename action, lock classification, retry delay) for one test
+// and restores them on cleanup. Tests using it must not run in parallel.
+func withHostsSeams(t *testing.T,
+	tempDir func() string,
+	sameVolume func(a, b string) bool,
+	rename func(oldpath, newpath string) error,
+	lockError func(error) bool,
+	delay time.Duration) {
+	t.Helper()
+	oldTemp, oldVol, oldRename, oldLock, oldDelay :=
+		hostsTempDir, hostsSameVolume, hostsRename, isRenameLockError, renameRetryDelay
+	hostsTempDir, hostsSameVolume, hostsRename, isRenameLockError, renameRetryDelay =
+		tempDir, sameVolume, rename, lockError, delay
+	t.Cleanup(func() {
+		hostsTempDir, hostsSameVolume, hostsRename, isRenameLockError, renameRetryDelay =
+			oldTemp, oldVol, oldRename, oldLock, oldDelay
+	})
+}
+
+// hostsFileWithBlock seeds a hosts file holding an outdated managed block.
+func hostsFileWithBlock(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "hosts")
+	old := renderBlock(td, netip.MustParseAddr("9.9.9.9"), netip.Addr{}, false)
+	if err := os.WriteFile(path, old, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// noStagingLeftover asserts no .cfhost-hosts-* temp file remains in dir.
+func noStagingLeftover(t *testing.T, dir, what string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".cfhost-hosts-") {
+			t.Fatalf("%s: staging leftover %s", what, e.Name())
+		}
+	}
+}
+
 func TestSpliceBlockPreservesOutsideBytes(t *testing.T) {
 	prefix := "user entry\r\n# manual mapping\r\n"
 	suffix := "tail without newline"
@@ -161,6 +210,206 @@ func TestUpdateHostsTransientReadErrorSkips(t *testing.T) {
 	if written {
 		t.Fatal("skip must not write anything")
 	}
+}
+
+func TestUpdateHostsTempPreferredWhenSameVolume(t *testing.T) {
+	// Same-volume TEMP (Windows layout): the temp file must be staged in
+	// TEMP, not in the antivirus-watched hosts directory, and renamed into
+	// place atomically.
+	dir := t.TempDir()
+	tempDir := t.TempDir()
+	path := hostsFileWithBlock(t, dir)
+
+	var renamedFrom string
+	withHostsSeams(t,
+		func() string { return tempDir },
+		func(a, b string) bool { return true },
+		func(oldpath, newpath string) error {
+			renamedFrom = oldpath
+			return os.Rename(oldpath, newpath)
+		},
+		func(err error) bool { return false },
+		0)
+
+	written, err := updateHosts(path, td, v4, netip.Addr{}, false)
+	if err != nil || !written {
+		t.Fatalf("update: written=%v err=%v", written, err)
+	}
+	if filepath.Dir(renamedFrom) != tempDir {
+		t.Fatalf("temp file must be staged in TEMP %s, got %s", tempDir, renamedFrom)
+	}
+	noStagingLeftover(t, tempDir, "TEMP after rename")
+	data, _ := os.ReadFile(path)
+	if !bytes.Contains(data, renderBlock(td, v4, netip.Addr{}, false)) {
+		t.Fatalf("hosts block not updated:\n%q", data)
+	}
+}
+
+func TestUpdateHostsTempCrossVolumeFallsBackToHostsDir(t *testing.T) {
+	// Cross-volume TEMP (rename would degrade to copy+delete): staging must
+	// fall back to the hosts directory to keep the rename atomic.
+	dir := t.TempDir()
+	tempDir := t.TempDir()
+	path := hostsFileWithBlock(t, dir)
+
+	var renamedFrom string
+	withHostsSeams(t,
+		func() string { return tempDir },
+		func(a, b string) bool { return false }, // simulated cross-volume TEMP
+		func(oldpath, newpath string) error {
+			renamedFrom = oldpath
+			return os.Rename(oldpath, newpath)
+		},
+		func(err error) bool { return false },
+		0)
+
+	written, err := updateHosts(path, td, v4, netip.Addr{}, false)
+	if err != nil || !written {
+		t.Fatalf("update: written=%v err=%v", written, err)
+	}
+	if filepath.Dir(renamedFrom) != dir {
+		t.Fatalf("cross-volume TEMP must stage next to hosts (%s), got %s", dir, renamedFrom)
+	}
+	entries, _ := os.ReadDir(tempDir)
+	if len(entries) != 0 {
+		t.Fatalf("nothing may be created in a cross-volume TEMP: %v", entries)
+	}
+}
+
+func TestUpdateHostsTempUnusableFallsBackToHostsDir(t *testing.T) {
+	// Same-volume but unusable TEMP (missing directory): staging retries in
+	// the hosts directory instead of failing the round.
+	dir := t.TempDir()
+	tempDir := filepath.Join(dir, "no-such-temp")
+	path := hostsFileWithBlock(t, dir)
+
+	var renamedFrom string
+	withHostsSeams(t,
+		func() string { return tempDir },
+		func(a, b string) bool { return true },
+		func(oldpath, newpath string) error {
+			renamedFrom = oldpath
+			return os.Rename(oldpath, newpath)
+		},
+		func(err error) bool { return false },
+		0)
+
+	written, err := updateHosts(path, td, v4, netip.Addr{}, false)
+	if err != nil || !written {
+		t.Fatalf("update: written=%v err=%v", written, err)
+	}
+	if filepath.Dir(renamedFrom) != dir {
+		t.Fatalf("unusable TEMP must stage next to hosts (%s), got %s", dir, renamedFrom)
+	}
+}
+
+func TestUpdateHostsRenameRetriesThenSucceeds(t *testing.T) {
+	// A rename failure sequence classified as an antivirus lock is retried
+	// with backoff and succeeds once the scan releases the file.
+	dir := t.TempDir()
+	path := hostsFileWithBlock(t, dir)
+	orig, _ := os.ReadFile(path)
+
+	failures := 3
+	calls := 0
+	withHostsSeams(t,
+		func() string { return "" },
+		func(a, b string) bool { return false },
+		func(oldpath, newpath string) error {
+			calls++
+			if failures > 0 {
+				failures--
+				return errFakeLock
+			}
+			return os.Rename(oldpath, newpath)
+		},
+		func(err error) bool { return errors.Is(err, errFakeLock) },
+		0)
+
+	written, err := updateHosts(path, td, v4, netip.Addr{}, false)
+	if err != nil || !written {
+		t.Fatalf("update after retries: written=%v err=%v", written, err)
+	}
+	if calls != 1+3 {
+		t.Fatalf("rename calls = %d, want 1 initial + 3 retries = 4", calls)
+	}
+	data, _ := os.ReadFile(path)
+	if bytes.Equal(data, orig) || !bytes.Contains(data, renderBlock(td, v4, netip.Addr{}, false)) {
+		t.Fatalf("hosts must hold the new block after retries:\n%q", data)
+	}
+	noStagingLeftover(t, dir, "hosts dir after retried rename")
+}
+
+func TestUpdateHostsRenameExhaustedSkips(t *testing.T) {
+	// Retry budget exhausted: the round is skipped (errHostsSkipped), hosts
+	// stays byte-for-byte identical and the staged temp file is cleaned up.
+	dir := t.TempDir()
+	path := hostsFileWithBlock(t, dir)
+	orig, _ := os.ReadFile(path)
+
+	calls := 0
+	withHostsSeams(t,
+		func() string { return "" },
+		func(a, b string) bool { return false },
+		func(oldpath, newpath string) error {
+			calls++
+			return errFakeLock
+		},
+		func(err error) bool { return errors.Is(err, errFakeLock) },
+		0)
+
+	written, err := updateHosts(path, td, v4, netip.Addr{}, false)
+	if !errors.Is(err, errHostsSkipped) {
+		t.Fatalf("exhausted retries must skip, got %v", err)
+	}
+	if written {
+		t.Fatal("skip must not report a write")
+	}
+	if calls != 1+renameRetryMax {
+		t.Fatalf("rename calls = %d, want 1 initial + %d retries", calls, renameRetryMax)
+	}
+	got, _ := os.ReadFile(path)
+	if !bytes.Equal(got, orig) {
+		t.Fatalf("hosts must stay untouched after exhausted retries:\n%q", got)
+	}
+	noStagingLeftover(t, dir, "hosts dir after exhausted retries")
+}
+
+func TestUpdateHostsRenameNonLockErrorSkipsWithoutRetry(t *testing.T) {
+	// A rename failure that is not an antivirus-style lock returns
+	// immediately: no retries, the round is skipped and the staged temp
+	// file is cleaned up. The hour-long retry delay guarantees the test
+	// budget blows up on any accidental retry.
+	dir := t.TempDir()
+	path := hostsFileWithBlock(t, dir)
+	orig, _ := os.ReadFile(path)
+
+	calls := 0
+	withHostsSeams(t,
+		func() string { return "" },
+		func(a, b string) bool { return false },
+		func(oldpath, newpath string) error {
+			calls++
+			return errors.New("not a lock")
+		},
+		func(err error) bool { return false },
+		time.Hour)
+
+	written, err := updateHosts(path, td, v4, netip.Addr{}, false)
+	if !errors.Is(err, errHostsSkipped) {
+		t.Fatalf("non-lock rename failure must skip, got %v", err)
+	}
+	if written {
+		t.Fatal("skip must not report a write")
+	}
+	if calls != 1 {
+		t.Fatalf("non-lock rename failure must not retry, calls = %d", calls)
+	}
+	got, _ := os.ReadFile(path)
+	if !bytes.Equal(got, orig) {
+		t.Fatalf("hosts must stay untouched after non-lock failure:\n%q", got)
+	}
+	noStagingLeftover(t, dir, "hosts dir after non-lock rename failure")
 }
 
 func TestRenderBlockOrder(t *testing.T) {

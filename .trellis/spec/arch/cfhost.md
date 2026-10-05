@@ -5,7 +5,7 @@
 - 候选源四形态语法: `pool:<url>[#<isp>]` (公开池 API, cfhub 形 JSON 对象 `{"pools":[{isp,family,ips:[{ip}],published}]}`, 地址在 ips[].ip 嵌套, 只取 published 且 isp 匹配, 缺省 national, 地址族按地址本身逐个判定), `domain:<域名>` (系统 DNS 解析 A), `list:<ip,...>` (静态), 其余 `https://...` (通用远程 API, 每行一个 IP 的文本或 JSON 字符串数组). 远程源仅接受 https 且走系统证书校验; 重定向仅限 https 目标 (含 10 跳上限), 降级跳转拒绝跟随.
 - 状态文件默认路径 os.UserConfigDir()/cfdoh/cfhost-state.json, 领域含在用 v4/v6, 上轮摘要, 下次刷新时刻, 连续失败计数与上轮候选; 单实例锁文件 cfhost.lock (含 PID, O_EXCL 原子创建, 并发启动仅一实例持锁; 活实例拒绝, 死实例覆盖) 同目录, 仅常驻模式持有.
 - 测速全部失败时保留 hosts 现状不动.
-- hosts 区块带标记 (# BEGIN cfhost 至 # END cfhost), 区块外逐字节保留; 原子更新; 最优地址未变化不重写; 更新后刷新系统 DNS 缓存. hosts 读取的瞬时错误 (如安全软件短暂锁定) 记告警并按本轮跳过: 不写 hosts, 在用地址与失败计数保持不变, 下周期重试, 守护不退出.
+- hosts 区块带标记 (# BEGIN cfhost 至 # END cfhost), 区块外逐字节保留; 原子更新; 最优地址未变化不重写; 更新后刷新系统 DNS 缓存. 临时文件优先写系统 TEMP 目录 (System32\drivers\etc 是杀软重点布防目录, 在其中创建文件的扫描概率远高于 TEMP), TEMP 与 hosts 不同卷或不可用时回退 hosts 同目录以保持 rename 原子性; rename 遇 Access denied / sharing violation (杀软扫描句柄) 以 200ms 间隔至多重试 5 次, 耗尽按本轮跳过. hosts 读取与写入的瞬时错误 (如安全软件短暂锁定) 记告警并按本轮跳过: 不写 hosts, 在用地址与失败计数保持不变, 下周期重试, 守护不退出.
 - 单实例锁, 重复启动退出.
 - Windows 服务化 (install/uninstall/start/stop) 与状态查询 (status); run-once 单轮执行. status 在配置加载失败时仍按 CFHOST_STATE_PATH 或默认路径渲染状态, 不因配置缺失整体失败.
 - 状态文件记录在用地址与上轮测速摘要; 日志带轮转 (超 1MiB 切至 .1 单代, 启动时与每次写入时检查, 长驻进程不重启也轮转).

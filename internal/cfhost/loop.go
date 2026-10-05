@@ -2,7 +2,6 @@ package cfhost
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -13,9 +12,16 @@ import (
 // hysteresis decision -> hosts update -> state save. RunLoop holds the
 // single-instance lock and repeats passes on the configured interval.
 
+// runProbes is the probe sweep seam (production: probeCandidates); tests
+// inject deterministic outcomes to exercise the hosts-update path offline.
+var runProbes = probeCandidates
+
 // RunOnce executes one full pass. When every source fails and no previous
 // candidate list exists it returns an error without touching hosts. When the
 // v4 sweep fails entirely, hosts stays untouched but the state is updated.
+// A transient hosts read/write failure skips the round: hosts, the current
+// addresses and the fail streak stay as-is while the state (next run,
+// candidates) is saved, so the daemon retries next cycle.
 func RunOnce(ctx context.Context, cfg *Config) error {
 	initLogging(cfg.stateDir())
 
@@ -30,7 +36,7 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 		cands = fallback
 	}
 
-	outcomes := probeCandidates(ctx, cands, cfg.probeOptions())
+	outcomes := runProbes(ctx, cands, cfg.probeOptions())
 	byAddr := make(map[netip.Addr]probeOutcome, len(outcomes))
 	okCount := 0
 	for _, o := range outcomes {
@@ -79,16 +85,15 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 
 	written, err := updateHosts(cfg.HostsPath, cfg.ManagedDomains, newV4, newV6, hasV6)
 	if err != nil {
-		if errors.Is(err, errHostsSkipped) {
-			// Transient hosts read failure: keep hosts, the current addresses
-			// and the fail streak as-is; the scheduled next run persists so
-			// the daemon stays alive and retries next cycle.
-			if serr := saveState(cfg.StatePath, st); serr != nil {
-				slog.Warn("cfhost: state save failed", "error", serr.Error())
-			}
-			return nil
+		// Transient hosts read/write failure (errHostsSkipped): nothing was
+		// written, the current addresses and the fail streak stay as-is, and
+		// the scheduled next run persists so the daemon stays alive and
+		// retries next cycle. A hosts write failure must never terminate the
+		// daemon.
+		if serr := saveState(cfg.StatePath, st); serr != nil {
+			slog.Warn("cfhost: state save failed", "error", serr.Error())
 		}
-		return fmt.Errorf("cfhost: hosts update: %w", err)
+		return nil
 	}
 	st.FailStreak = streak
 	st.CurrentV4 = newV4.String()

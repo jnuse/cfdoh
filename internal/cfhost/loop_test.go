@@ -1,11 +1,14 @@
 package cfhost
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -128,6 +131,124 @@ func testConfig(t *testing.T, hosts, state string, sources ...string) *Config {
 		HostsPath:      hosts,
 		StatePath:      state,
 		CandidateLimit: 16,
+	}
+}
+
+// withFakeProbes injects a deterministic successful probe sweep so RunOnce
+// and RunLoop tests drive the hosts-update path without network access.
+func withFakeProbes(t *testing.T, outcomes ...probeOutcome) {
+	t.Helper()
+	old := runProbes
+	runProbes = func(ctx context.Context, addrs []netip.Addr, opts probeOptions) []probeOutcome {
+		return outcomes
+	}
+	t.Cleanup(func() { runProbes = old })
+}
+
+func TestRunOnceHostsWriteFailureSkipsRound(t *testing.T) {
+	// Persistent hosts write failure (rename retries exhausted): RunOnce
+	// returns nil, hosts stays untouched, the current address and fail
+	// streak survive unchanged and the state (next run, candidates) is
+	// saved — the daemon retries next cycle.
+	dir := t.TempDir()
+	hostsPath := hostsFileWithBlock(t, dir)
+	orig, _ := os.ReadFile(hostsPath)
+	orig = append([]byte("user mapping\r\n"), orig...)
+	if err := os.WriteFile(hostsPath, orig, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dir, "state.json")
+	if err := saveState(statePath, clientState{CurrentV4: "9.9.9.9"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Current 9.9.9.9 alive at 100ms, candidate 1.1.1.1 at 10ms: a >20%
+	// gain forces a switch, so a write is attempted (and injected to fail).
+	cur := netip.MustParseAddr("9.9.9.9")
+	cand := netip.MustParseAddr("1.1.1.1")
+	withFakeProbes(t,
+		probeOutcome{addr: cand, median: 10 * time.Millisecond, ok: true},
+		probeOutcome{addr: cur, median: 100 * time.Millisecond, ok: true})
+	withHostsSeams(t,
+		func() string { return "" },
+		func(a, b string) bool { return false },
+		func(oldpath, newpath string) error { return errFakeLock },
+		func(err error) bool { return errors.Is(err, errFakeLock) },
+		0)
+
+	cfg := testConfig(t, hostsPath, statePath, "list:1.1.1.1")
+	if err := RunOnce(context.Background(), cfg); err != nil {
+		t.Fatalf("hosts write failure must skip the round, not fail RunOnce: %v", err)
+	}
+
+	got, _ := os.ReadFile(hostsPath)
+	if !bytes.Equal(got, orig) {
+		t.Fatalf("hosts must stay untouched on write failure:\n%q", got)
+	}
+	st, found := loadState(statePath)
+	if !found {
+		t.Fatal("state must be saved on skip")
+	}
+	if st.CurrentV4 != "9.9.9.9" {
+		t.Fatalf("current v4 must survive the skip, got %q", st.CurrentV4)
+	}
+	if st.FailStreak != 0 {
+		t.Fatalf("fail streak must stay unchanged, got %d", st.FailStreak)
+	}
+	if st.NextRun <= 0 {
+		t.Fatal("next_run must be scheduled despite the skip")
+	}
+	if len(st.Candidates) != 1 || st.Candidates[0] != "1.1.1.1" {
+		t.Fatalf("candidates must persist: %v", st.Candidates)
+	}
+}
+
+func TestRunLoopSurvivesHostsWriteFailure(t *testing.T) {
+	// The daemon loop must not exit while every hosts write fails: passes
+	// keep running (each burning the full rename retry budget) until the
+	// context is cancelled, and cancellation still returns nil.
+	dir := t.TempDir()
+	hostsPath := hostsFileWithBlock(t, dir)
+	statePath := filepath.Join(dir, "state.json")
+
+	var calls atomic.Int64
+	withFakeProbes(t,
+		probeOutcome{addr: netip.MustParseAddr("1.1.1.1"), median: 10 * time.Millisecond, ok: true})
+	withHostsSeams(t,
+		func() string { return "" },
+		func(a, b string) bool { return false },
+		func(oldpath, newpath string) error {
+			calls.Add(1)
+			return errFakeLock
+		},
+		func(err error) bool { return errors.Is(err, errFakeLock) },
+		0)
+
+	cfg := testConfig(t, hostsPath, statePath, "list:1.1.1.1")
+	cfg.Interval = 20 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- RunLoop(ctx, cfg) }()
+
+	// Two full passes = 2*(1 initial + renameRetryMax retries) calls. A
+	// RunLoop that died on the first write failure would stall here.
+	wantCalls := int64(2 * (1 + renameRetryMax))
+	deadline := time.Now().Add(10 * time.Second)
+	for calls.Load() < wantCalls && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunLoop must survive hosts write failures and stop cleanly, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunLoop did not return after cancel")
+	}
+	if calls.Load() < wantCalls {
+		t.Fatalf("expected >= %d rename calls (two full passes), got %d", wantCalls, calls.Load())
 	}
 }
 

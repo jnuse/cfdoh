@@ -408,7 +408,7 @@ cfdoh 的行为级需求: 每项功能的用户故事从 background.md 推导, �
 - 管辖域名: 配置列表, 一项或多项, 均为 Cloudflare 代理域名 (含 DoH 域名); 列表外的域名一律不写
 - 只维护带标记的区块 (# BEGIN cfhost 至 # END cfhost), 区块外内容逐字节保留
 - 每域名写入指向当前最优 IPv4 地址的行; 有可用 IPv6 优选时同法追加对应行
-- 原子更新: 先写临时文件再替换, 保留原文件权限
+- 原子更新: 临时文件优先写系统 TEMP 目录 (避开 etc 目录的杀软扫描闸), 跨卷或 TEMP 不可用时回退 hosts 同目录; 先写完整内容再 rename 替换, 保留原文件权限; rename 遇杀软句柄 (access denied / sharing violation) 以 200ms 间隔至多重试 5 次, 重试耗尽按本轮跳过 (不写 hosts, 在用地址不变, 守护不退出)
 - 最优地址未变化时不重写文件
 - 更新后刷新系统 DNS 缓存 (Windows 为 ipconfig /flushdns)
 
