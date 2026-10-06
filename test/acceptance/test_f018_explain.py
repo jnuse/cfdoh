@@ -170,6 +170,31 @@ class F018ExplainTest(unittest.TestCase):
             "GET", "/explain?name=..bad..")
         self.assertEqual(status, 400, "非法 name 须 400")
 
+    def test_f018_pool_scope_default_and_scoped(self):
+        """F-018: pool scope 无窄层时显示 default; 前缀池贡献后显示前缀串."""
+        status, _, body = self.inst.request(
+            "GET", "/explain?name=cf18.example.com&type=A")
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual((data.get("pool") or {}).get("scope"), "default",
+                         "无窄层池贡献时 explain 须显示 default: %r"
+                         % data.get("pool"))
+        # 上报本机前缀 scoped 池后再查, scope 应显示前缀串
+        status, _, _ = self.inst.admin_json(
+            "POST", "/admin/preferred",
+            payload={"ipv4": ["104.16.11.1"], "ipv6": [],
+                     "ttl": 600, "source": "probe-scope",
+                     "scope": "client"})
+        self.assertTrue(200 <= status < 300,
+                        "scoped 池上报失败: %s" % status)
+        status, _, body = self.inst.request(
+            "GET", "/explain?name=cf18.example.com&type=A")
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        scope = (data.get("pool") or {}).get("scope")
+        self.assertTrue(scope and scope != "default",
+                        "scoped 池贡献后须显示前缀 scope: %r" % scope)
+
     def test_f018_readonly(self):
         """F-018: explain 只读 — 之后同键 DoH 查询仍真实出向 (未写缓存)."""
         status, _, _ = self.inst.request(

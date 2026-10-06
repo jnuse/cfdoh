@@ -578,7 +578,13 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 	case perr != nil:
 		poolView = map[string]any{"error": perr.Error()}
 	case p != nil:
-		poolView = map[string]any{"scope": p.Scope, "ipv4": p.IPv4, "ipv6": p.IPv6}
+		// refer 对齐: 未有窄层贡献时 scope 空串展示为字面量 "default"
+		// (真实 scope 名只可能是前缀串或 isp:*, 不会冲突).
+		scope := p.Scope
+		if scope == "" {
+			scope = "default"
+		}
+		poolView = map[string]any{"scope": scope, "ipv4": p.IPv4, "ipv6": p.IPv6}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
