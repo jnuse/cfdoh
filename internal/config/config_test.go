@@ -233,3 +233,60 @@ func TestLongConfigLineAccepted(t *testing.T) {
 		t.Fatal("line beyond the 4MiB cap must fail")
 	}
 }
+
+// loadTestConfig unsets the ISP-related variables, applies env with
+// t.Setenv (auto-restored) and loads.
+func loadTestConfig(t *testing.T, env map[string]string) *Config {
+	t.Helper()
+	os.Unsetenv("ISP_TABLE_URL")
+	os.Unsetenv("ISP_SOURCES")
+	for k, v := range env {
+		t.Setenv(k, v)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return cfg
+}
+
+func TestIspSourcesDefaultsAndModes(t *testing.T) {
+	// Unset ISP_TABLE_URL and ISP_SOURCES: the built-in operator sources
+	// load; explicit empty disables; a custom list replaces; the table URL
+	// wins and leaves sources empty.
+	t.Run("default sources", func(t *testing.T) {
+		cfg := loadTestConfig(t, nil)
+		if cfg.IspTableURL != "" || len(cfg.IspSources) != 4 {
+			t.Fatalf("want 4 built-in sources, got table=%q sources=%d", cfg.IspTableURL, len(cfg.IspSources))
+		}
+		for _, s := range cfg.IspSources {
+			if !strings.HasPrefix(s.URL, "https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/") {
+				t.Fatalf("unexpected built-in URL %q", s.URL)
+			}
+		}
+	})
+	t.Run("explicit empty disables", func(t *testing.T) {
+		cfg := loadTestConfig(t, map[string]string{"ISP_SOURCES": " "})
+		if len(cfg.IspSources) != 0 {
+			t.Fatalf("blank ISP_SOURCES must disable, got %d sources", len(cfg.IspSources))
+		}
+	})
+	t.Run("custom list", func(t *testing.T) {
+		cfg := loadTestConfig(t, map[string]string{
+			"ISP_SOURCES": " chinanet=https://a.example/c.txt , bad, x=http://plain.example/c.txt",
+		})
+		if len(cfg.IspSources) != 1 || cfg.IspSources[0].Name != "chinanet" {
+			t.Fatalf("want only the valid https entry, got %+v", cfg.IspSources)
+		}
+	})
+	t.Run("table url wins", func(t *testing.T) {
+		cfg := loadTestConfig(t, map[string]string{
+			"ISP_TABLE_URL": "https://table.example/isp.txt",
+			"ISP_SOURCES":   "chinanet=https://a.example/c.txt",
+		})
+		if cfg.IspTableURL == "" || len(cfg.IspSources) != 0 {
+			t.Fatalf("ISP_TABLE_URL must override sources, got table=%q sources=%d",
+				cfg.IspTableURL, len(cfg.IspSources))
+		}
+	})
+}

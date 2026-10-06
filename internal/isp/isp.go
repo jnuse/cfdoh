@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"regexp"
@@ -83,7 +84,7 @@ func Reset() {
 // first load runs in the background, and until it lands every lookup misses
 // and the caller falls back to the nationwide pool.
 func ScopeOf(ctx context.Context, clientIP string, cfg *config.Config) (string, bool) {
-	if strings.TrimSpace(clientIP) == "" || cfg == nil || cfg.IspTableURL == "" {
+	if strings.TrimSpace(clientIP) == "" || cfg == nil || ispLookupDisabled(cfg) {
 		return "", false
 	}
 	addr, err := netip.ParseAddr(strings.TrimSpace(clientIP))
@@ -107,6 +108,12 @@ func ScopeOf(ctx context.Context, clientIP string, cfg *config.Config) (string, 
 		return "", false
 	}
 	return scopePrefix + name, true
+}
+
+// ispLookupDisabled reports operator lookup off: neither the explicit
+// table URL nor any built-in/custom source is configured.
+func ispLookupDisabled(cfg *config.Config) bool {
+	return cfg.IspTableURL == "" && len(cfg.IspSources) == 0
 }
 
 // needRefresh reports whether a refresh should start now: the failed-load
@@ -139,29 +146,10 @@ func refresh(ctx context.Context, cfg *config.Config) {
 	mu.Unlock()
 
 	err := func() error {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
-		defer cancel()
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.IspTableURL, nil)
+		text, err := fetchTableText(ctx, cfg)
 		if err != nil {
 			return err
 		}
-		req.Header.Set("Cache-Control", "no-cache")
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode > 299 {
-			return fmt.Errorf("HTTP %d", resp.StatusCode)
-		}
-		body, err := io.ReadAll(io.LimitReader(resp.Body, maxTableBytes+1))
-		if err != nil {
-			return err
-		}
-		if len(body) > maxTableBytes {
-			return fmt.Errorf("table exceeds %d bytes", maxTableBytes)
-		}
-		text := string(body)
 		parsed, err := parseTable(text)
 		if err != nil {
 			return err
@@ -180,10 +168,85 @@ func refresh(ctx context.Context, cfg *config.Config) {
 	refreshing = false
 	if err != nil {
 		failedAt = now()
+		slog.Warn("event", "event", "isp_table_refresh_failed", "detail", err.Error())
 	} else {
 		failedAt = time.Time{}
 	}
 	mu.Unlock()
+}
+
+// fetchTableText builds the "<isp> <cidr>" table text for the configured
+// mode: an explicit ISP_TABLE_URL is fetched whole (single-table mode,
+// custom formats); otherwise every ISP_SOURCES document is fetched
+// concurrently and its bare CIDR lines are attributed to the source name.
+// Any failure fails the whole round — the previous table keeps serving and
+// the retry backoff applies — so a partial fetch can never shrink coverage.
+func fetchTableText(ctx context.Context, cfg *config.Config) (string, error) {
+	if cfg.IspTableURL != "" {
+		body, err := fetchDocument(ctx, cfg.IspTableURL)
+		if err != nil {
+			return "", fmt.Errorf("table: %w", err)
+		}
+		return string(body), nil
+	}
+	bodies := make([][]byte, len(cfg.IspSources))
+	errs := make([]error, len(cfg.IspSources))
+	var wg sync.WaitGroup
+	for i := range cfg.IspSources {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			bodies[i], errs[i] = fetchDocument(ctx, cfg.IspSources[i].URL)
+		}(i)
+	}
+	wg.Wait()
+	for i := range cfg.IspSources {
+		if errs[i] != nil {
+			return "", fmt.Errorf("source %s: %w", cfg.IspSources[i].Name, errs[i])
+		}
+	}
+	var sb strings.Builder
+	for i := range cfg.IspSources {
+		for _, raw := range strings.Split(string(bodies[i]), "\n") {
+			line := strings.TrimSpace(raw)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			sb.WriteString(cfg.IspSources[i].Name)
+			sb.WriteByte(' ')
+			sb.WriteString(line)
+			sb.WriteByte('\n')
+		}
+	}
+	return sb.String(), nil
+}
+
+// fetchDocument GETs one URL under the refresh budget, enforcing 2xx,
+// the per-document size cap and no-cache.
+func fetchDocument(ctx context.Context, url string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Cache-Control", "no-cache")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxTableBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxTableBytes {
+		return nil, fmt.Errorf("document exceeds %d bytes", maxTableBytes)
+	}
+	return body, nil
 }
 
 // parseTable parses "<isp> <cidr>" lines. Malformed lines are skipped

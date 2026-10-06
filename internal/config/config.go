@@ -36,6 +36,7 @@ type Config struct {
 	HubToken             string
 	DohOriginToken       string
 	IspTableURL          string
+	IspSources           []IspSource
 	CFIPv4URL            string
 	CFIPv6URL            string
 	RulesJSON            string
@@ -69,6 +70,58 @@ type Config struct {
 }
 
 var defaultUpstreams = "https://cloudflare-dns.com/dns-query,https://dns.google/dns-query,https://dns.quad9.net/dns-query"
+
+// defaultIspSources is the built-in operator CIDR source set: the
+// ip-lists branch of gaoyifan/china-operator-ip, one file per operator,
+// regenerated daily by upstream Actions. Each entry names the scope the
+// file's CIDR lines belong to ("<name> <cidr>" rows after fetch).
+const defaultIspSources = "chinanet=https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/chinanet.txt," +
+	"unicom=https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/unicom.txt," +
+	"cmcc=https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/cmcc.txt," +
+	"cernet=https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/cernet.txt"
+
+// IspSource is one operator CIDR source: every non-comment line of the
+// fetched document is a bare CIDR attributed to Name.
+type IspSource struct {
+	Name string
+	URL  string
+}
+
+// parseIspSources splits "name=url" comma entries; malformed entries and
+// non-https URLs are dropped. Name legality is enforced later by the
+// table parser (rows with an invalid name are skipped), so no rule is
+// duplicated here.
+func parseIspSources(raw string) []IspSource {
+	var out []IspSource
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		name, url, found := strings.Cut(item, "=")
+		name = strings.TrimSpace(name)
+		url = strings.TrimSpace(url)
+		if !found || name == "" || !strings.HasPrefix(url, "https://") {
+			slog.Warn("config: invalid ISP_SOURCES entry dropped", "entry", item)
+			continue
+		}
+		out = append(out, IspSource{Name: name, URL: url})
+	}
+	return out
+}
+
+// ispSourcesWord renders the source names (or a state word) for the
+// sanitized summary.
+func ispSourcesWord(c *Config) string {
+	if c.IspTableURL != "" {
+		return "table-override"
+	}
+	names := make([]string, 0, len(c.IspSources))
+	for _, s := range c.IspSources {
+		names = append(names, s.Name)
+	}
+	return strings.Join(names, ",")
+}
 
 type source struct {
 	file map[string]string
@@ -190,6 +243,19 @@ func Load() (*Config, error) {
 	cfg.HubToken = src.str("HUB_TOKEN", "")
 	cfg.DohOriginToken = src.str("DOH_ORIGIN_TOKEN", "")
 	cfg.IspTableURL = src.str("ISP_TABLE_URL", "")
+	// ISP_SOURCES follows the POOL_FEED_URL pattern: unset keeps the
+	// built-in operator CIDR sources (gaoyifan/china-operator-ip, refreshed
+	// daily upstream); explicitly empty disables operator lookup; a custom
+	// "name=url,..." list replaces the defaults. ISP_TABLE_URL wins when set.
+	if cfg.IspTableURL == "" {
+		var raw string
+		if v, ok := src.lookup("ISP_SOURCES"); ok {
+			raw = v
+		} else {
+			raw = defaultIspSources
+		}
+		cfg.IspSources = parseIspSources(raw)
+	}
 	cfg.CFIPv4URL = src.str("CF_IPV4_URL", "https://www.cloudflare.com/ips-v4")
 	cfg.CFIPv6URL = src.str("CF_IPV6_URL", "https://www.cloudflare.com/ips-v6")
 	cfg.RulesJSON = src.str("RULES_JSON", "[]")
@@ -246,7 +312,7 @@ func (c *Config) SanitizedSummary() string {
 	fmt.Fprintf(&sb, "ecs mode=%s domains=%s v4/%d v6/%d\n", c.EcsMode, strings.Join(c.EcsDomains, ","), c.EcsIPv4Prefix, c.EcsIPv6Prefix)
 	fmt.Fprintf(&sb, "rewrite=%v preferred_domain=%s drop_aaaa=%v\n", c.CFRewriteEnabled, strings.Join(c.CFPreferredDomain, ","), c.CFDropAAAA)
 	fmt.Fprintf(&sb, "admin_token=%s hub_token=%s doh_origin_token=%s\n", configuredWord(c.AdminToken), configuredWord(c.HubToken), configuredWord(c.DohOriginToken))
-	fmt.Fprintf(&sb, "isp_table=%s\n", configuredWord(c.IspTableURL))
+	fmt.Fprintf(&sb, "isp_table=%s sources=%s\n", configuredWord(c.IspTableURL), ispSourcesWord(c))
 	fmt.Fprintf(&sb, "ech enabled=%v source=%s meta=%s\n", c.EchEnabled, c.EchSourceDomain, configuredWord(c.MetaEchConfigBase64))
 	fmt.Fprintf(&sb, "pool_feed url=%s interval=%ds ttl=%ds\n", configuredWord(c.PoolFeedURL), c.PoolFeedIntervalSec, c.PoolFeedTTLSec)
 	fmt.Fprintf(&sb, "listen=%s:%d tls=%v aliases=%s\n", c.Host, c.Port, c.TLSEnabled(), strings.Join(c.PathAliases, ","))

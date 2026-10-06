@@ -342,3 +342,92 @@ func TestUnchangedContentNotRebuilt(t *testing.T) {
 		t.Fatal("identical content must not rebuild the table")
 	}
 }
+
+func TestSourcesModeAssemblyAndLookup(t *testing.T) {
+	// Two bare-CIDR sources assemble into one "<isp> <cidr>" table;
+	// comments and blank lines are dropped; lookups hit the right scope.
+	Reset()
+	defer Reset()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/chinanet.txt", func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("# header\n58.247.0.0/16\n\n1.2.0.0/16\n"))
+	})
+	mux.HandleFunc("/cernet.txt", func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("166.111.0.0/16\n"))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	cfg := &config.Config{IspSources: []config.IspSource{
+		{Name: "chinanet", URL: srv.URL + "/chinanet.txt"},
+		{Name: "cernet", URL: srv.URL + "/cernet.txt"},
+	}}
+
+	if _, ok := ScopeOf(context.Background(), "58.247.22.1", cfg); ok {
+		t.Fatal("first lookup races the async load; expected a miss")
+	}
+	if !waitFor(stateObserved, 2*time.Second) {
+		t.Fatal("background load never finished")
+	}
+	for ip, want := range map[string]string{
+		"58.247.22.1": "isp:chinanet",
+		"1.2.3.4":     "isp:chinanet",
+		"166.111.8.9": "isp:cernet",
+	} {
+		if scope, ok := ScopeOf(context.Background(), ip, cfg); !ok || scope != want {
+			t.Fatalf("ScopeOf(%s) = %q,%v want %q", ip, scope, ok, want)
+		}
+	}
+	if _, ok := ScopeOf(context.Background(), "8.8.8.8", cfg); ok {
+		t.Fatal("unlisted address must not map to a scope")
+	}
+}
+
+func TestSourcesModeOneFailureKeepsOldTable(t *testing.T) {
+	// A round with any failed source must not install anything: the
+	// previously loaded table keeps serving and the failure backoff starts.
+	Reset()
+	defer Reset()
+	var failCernet atomic.Bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/chinanet.txt", func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("58.247.0.0/16\n"))
+	})
+	mux.HandleFunc("/cernet.txt", func(w http.ResponseWriter, r *http.Request) {
+		if failCernet.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte("166.111.0.0/16\n"))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	cfg := &config.Config{IspSources: []config.IspSource{
+		{Name: "chinanet", URL: srv.URL + "/chinanet.txt"},
+		{Name: "cernet", URL: srv.URL + "/cernet.txt"},
+	}}
+
+	ScopeOf(context.Background(), "166.111.8.9", cfg) // trigger first load
+	if !waitFor(stateObserved, 2*time.Second) {
+		t.Fatal("background load never finished")
+	}
+	if scope, ok := ScopeOf(context.Background(), "166.111.8.9", cfg); !ok || scope != "isp:cernet" {
+		t.Fatalf("initial table must serve cernet, got %q,%v", scope, ok)
+	}
+
+	failCernet.Store(true)
+	mu.Lock()
+	loadedAt = time.Time{} // force the next refresh window
+	mu.Unlock()
+	ScopeOf(context.Background(), "166.111.8.9", cfg)
+	if !waitFor(func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return !failedAt.IsZero()
+	}, 2*time.Second) {
+		t.Fatal("failed round never recorded")
+	}
+	// The old table still answers while the sources are failing.
+	if scope, ok := ScopeOf(context.Background(), "166.111.8.9", cfg); !ok || scope != "isp:cernet" {
+		t.Fatalf("stale table must keep serving after a failed round, got %q,%v", scope, ok)
+	}
+}
