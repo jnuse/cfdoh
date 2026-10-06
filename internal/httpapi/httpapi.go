@@ -631,6 +631,12 @@ func summarizeAnswers(pkt *wire.Packet) []map[string]any {
 			entry["ipv4hint"] = v4
 			entry["ipv6hint"] = v6
 			entry["ech"] = len(echList) > 0
+			// The raw ECHConfigList is public by design (it ships in DNS);
+			// exposing it base64-encoded makes /explain self-sufficient for
+			// verifying what was injected without a second dig.
+			if len(echList) > 0 {
+				entry["ech_config"] = base64.StdEncoding.EncodeToString(echList)
+			}
 		}
 		out = append(out, entry)
 	}

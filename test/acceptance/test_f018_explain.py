@@ -163,6 +163,15 @@ class F018ExplainTest(unittest.TestCase):
         self.assertTrue(verdict.get("usable"),
                         "CF 站点三类型齐备且含 ech 时 Chromium 判定须可用: %r"
                         % verdict)
+        https_answers = ((answers.get("HTTPS") or {}).get("answers")) or []
+        ech_cfgs = [a.get("ech_config") for a in https_answers
+                    if a.get("ech")]
+        self.assertTrue(ech_cfgs,
+                        "注入成功时 HTTPS 条目须携带 ech_config: %r" % https_answers)
+        import base64 as _b64
+        for cfg in ech_cfgs:
+            self.assertGreater(len(cfg), 0)
+            _b64.b64decode(cfg)  # 须为合法 base64, 解码失败抛错
 
     def test_f018_invalid_name_400(self):
         """F-018 AC: 非法 name → 400."""
