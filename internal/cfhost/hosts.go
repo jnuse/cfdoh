@@ -19,7 +19,10 @@ import (
 // cfhost) is owned by the daemon; everything outside is preserved byte for
 // byte. Updates are atomic (full temp file + rename; the temp file prefers
 // the system TEMP directory to dodge the antivirus gate on the etc
-// directory) and keep the original file mode. Unchanged block content never
+// directory), keep the original file mode and — on Windows, where a
+// same-volume rename carries the source ACL — the original security
+// descriptor is applied to the temp file before the rename so the DNS
+// Client service keeps its read access. Unchanged block content never
 // triggers a write.
 
 const (
@@ -33,12 +36,13 @@ const (
 var errHostsSkipped = errors.New("cfhost: hosts read or write failed, update skipped")
 
 // Injection seams (see the newProbeTLSConfig precedent): tests override the
-// temp directory, the same-volume decision, the rename action and the
-// lock-error classification to simulate Windows antivirus races without a
-// real scanner.
+// temp directory, the same-volume decision, the ACL carry, the rename action
+// and the lock-error classification to simulate Windows antivirus races
+// without a real scanner.
 var (
 	hostsTempDir      = os.TempDir
 	hostsSameVolume   = sameVolumeDefault
+	hostsPreserveACL  = hostsPreserveACLDefault
 	hostsRename       = os.Rename
 	isRenameLockError = isRenameLockErrorDefault
 )
@@ -143,6 +147,14 @@ func updateHosts(path string, domains []string, v4, v6 netip.Addr, hasV6 bool) (
 	}
 	tmpName := writeHostsTemp(filepath.Dir(path), content, mode)
 	if tmpName == "" {
+		return false, errHostsSkipped
+	}
+	// The ACL carry must precede the rename: a same-volume rename keeps the
+	// temp file's inherited ACL (Windows), which would lock out the DNS
+	// Client service. A failure skips the round — the old file stays intact.
+	if err := hostsPreserveACL(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		slog.Warn("cfhost: hosts acl apply failed, skipping hosts update this round", "error", err.Error())
 		return false, errHostsSkipped
 	}
 	if err := renameHostsWithRetry(tmpName, path); err != nil {

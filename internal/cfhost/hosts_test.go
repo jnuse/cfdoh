@@ -303,6 +303,68 @@ func TestUpdateHostsTempUnusableFallsBackToHostsDir(t *testing.T) {
 	}
 }
 
+func TestUpdateHostsACLCarryOrderAndFailureSkips(t *testing.T) {
+	// The ACL carry runs after staging, before the rename, with the staged
+	// file and the original hosts as arguments; a carry failure skips the
+	// round (old file intact, temp cleaned) without attempting the rename.
+	for _, tc := range []struct {
+		name      string
+		carryErr  error
+		wantWrite bool
+	}{{"carry ok", nil, true}, {"carry fails", errFakeLock, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := hostsFileWithBlock(t, dir)
+			orig, _ := os.ReadFile(path)
+
+			var events []string
+			withHostsSeams(t,
+				func() string { return "" },
+				func(a, b string) bool { return false },
+				func(oldpath, newpath string) error {
+					events = append(events, "rename")
+					return os.Rename(oldpath, newpath)
+				},
+				func(err error) bool { return false },
+				0)
+			oldCarry := hostsPreserveACL
+			hostsPreserveACL = func(tmpName, origPath string) error {
+				if origPath != path {
+					t.Errorf("carry origPath = %q, want hosts path %q", origPath, path)
+				}
+				if _, err := os.Stat(tmpName); err != nil {
+					t.Errorf("carry must see the staged file: %v", err)
+				}
+				events = append(events, "acl")
+				return tc.carryErr
+			}
+			t.Cleanup(func() { hostsPreserveACL = oldCarry })
+
+			written, err := updateHosts(path, td, v4, netip.Addr{}, false)
+			if tc.wantWrite {
+				if err != nil || !written {
+					t.Fatalf("update: written=%v err=%v", written, err)
+				}
+				if len(events) != 2 || events[0] != "acl" || events[1] != "rename" {
+					t.Fatalf("carry must precede rename, events=%v", events)
+				}
+				return
+			}
+			if !errors.Is(err, errHostsSkipped) {
+				t.Fatalf("carry failure must skip, got %v", err)
+			}
+			if written || len(events) != 1 || events[0] != "acl" {
+				t.Fatalf("carry failure must not rename, events=%v written=%v", events, written)
+			}
+			got, _ := os.ReadFile(path)
+			if !bytes.Equal(got, orig) {
+				t.Fatalf("hosts must stay untouched after carry failure:\n%q", got)
+			}
+			noStagingLeftover(t, dir, "hosts dir after carry failure")
+		})
+	}
+}
+
 func TestUpdateHostsRenameRetriesThenSucceeds(t *testing.T) {
 	// A rename failure sequence classified as an antivirus lock is retried
 	// with backoff and succeeds once the scan releases the file.
