@@ -48,9 +48,26 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 	}
 	v4top, v6top := topByFamily(outcomes)
 
+	// oldCur feeds the per-pass summary line: the address in force when
+	// this pass started (st.CurrentV4 is overwritten by the decision below).
+	oldCur := st.CurrentV4
+
 	now := time.Now()
 	st.NextRun = now.Add(cfg.Interval).Unix()
 	st.Candidates = addrStrings(cands)
+
+	// passDone emits the one-line per-pass summary: every pass logs exactly
+	// one line, so a silent gap in the log can only mean the process was not
+	// running. tested/ok describe the sweep, best_v4 the winner, decision
+	// the outcome (updated / forced / kept / v4-fail / skipped).
+	passDone := func(decision string) {
+		best := "none 0ms"
+		if v4top != nil {
+			best = fmt.Sprintf("%s %dms", v4top.addr.String(), v4top.median.Milliseconds())
+		}
+		slog.Info("event", "event", "pass_done", "detail",
+			fmt.Sprintf("tested=%d ok=%d best_v4=%s decision=%s", len(cands), okCount, best, decision))
+	}
 
 	if v4top == nil {
 		// Full v4 sweep failure: keep hosts as-is (PRD F-024).
@@ -59,6 +76,7 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 		if err := saveState(cfg.StatePath, st); err != nil {
 			slog.Warn("cfhost: state save failed", "error", err.Error())
 		}
+		passDone("v4-fail")
 		return nil
 	}
 
@@ -74,7 +92,7 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 			curV4Alive = true
 		}
 	}
-	keepV4, streak, _ := decideHysteresis(hasCurV4, curV4Alive, st.FailStreak,
+	keepV4, streak, forced := decideHysteresis(hasCurV4, curV4Alive, st.FailStreak,
 		cfg.FailoverRounds, curV4Median, v4top.median, cfg.Hysteresis)
 	newV4 := v4top.addr
 	if keepV4 {
@@ -94,6 +112,7 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 		if serr := saveState(cfg.StatePath, st); serr != nil {
 			slog.Warn("cfhost: state save failed", "error", serr.Error())
 		}
+		passDone("skipped")
 		return nil
 	}
 	st.FailStreak = streak
@@ -107,15 +126,28 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 
 	if written {
 		flushDNS()
-		slog.Info("event", "event", "hosts_updated", "detail",
-			fmt.Sprintf("domains=%d v4=%s v6=%s", len(cfg.ManagedDomains), newV4.String(), st.CurrentV6))
-	} else if keepV4 {
+	}
+
+	// decision detail: what changed and against which baseline
+	switch {
+	case forced:
+		slog.Info("event", "event", "pass_done", "detail",
+			fmt.Sprintf("tested=%d ok=%d best_v4=%s %dms decision=forced old=%s (fail-streak)",
+				len(cands), okCount, v4top.addr.String(), v4top.median.Milliseconds(), oldCur))
+	case keepV4:
 		gain := 0.0
 		if curV4Median > 0 {
 			gain = (float64(curV4Median-v4top.median) / float64(curV4Median)) * 100
 		}
-		slog.Info("event", "event", "hosts_kept", "detail",
-			fmt.Sprintf("current=%s candidate=%s gain=%.1f%%", newV4.String(), v4top.addr.String(), gain))
+		slog.Info("event", "event", "pass_done", "detail",
+			fmt.Sprintf("tested=%d ok=%d best_v4=%s %dms decision=kept current=%s gain=%.1f%%",
+				len(cands), okCount, v4top.addr.String(), v4top.median.Milliseconds(), oldCur, gain))
+	default:
+		// a switch decision: the block was written, or the rendered block
+		// already matched the file (a state/file reconciliation pass)
+		slog.Info("event", "event", "pass_done", "detail",
+			fmt.Sprintf("tested=%d ok=%d best_v4=%s %dms decision=updated old=%s",
+				len(cands), okCount, v4top.addr.String(), v4top.median.Milliseconds(), oldCur))
 	}
 
 	if err := saveState(cfg.StatePath, st); err != nil {

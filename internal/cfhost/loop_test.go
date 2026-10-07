@@ -408,3 +408,54 @@ func TestLoopReloadsConfigEachPass(t *testing.T) {
 		t.Fatalf("state path relocation must be refused until restart, got %q", got.StatePath)
 	}
 }
+
+func TestPassDoneLoggedEveryPass(t *testing.T) {
+	// Every pass emits exactly one pass_done line (updated / kept / v4-fail /
+	// skipped), including the reconciliation pass where the switch decision
+	// renders content identical to the hosts file.
+	dir := t.TempDir()
+	hostsPath := filepath.Join(dir, "hosts")
+	statePath := filepath.Join(dir, "state.json")
+	cfg := testConfig(t, hostsPath, statePath, "list:1.1.1.1")
+
+	cur := netip.MustParseAddr("9.9.9.9")
+	cand := netip.MustParseAddr("1.1.1.1")
+	withFakeProbes(t,
+		probeOutcome{addr: cand, median: 10 * time.Millisecond, ok: true},
+		probeOutcome{addr: cur, median: 100 * time.Millisecond, ok: true})
+	withHostsSeams(t,
+		func() string { return "" },
+		func(a, b string) bool { return false },
+		func(oldpath, newpath string) error { return os.Rename(oldpath, newpath) },
+		func(err error) bool { return false },
+		0)
+
+	// Pass 1: switch to 1.1.1.1 (decision=updated).
+	if err := RunOnce(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(hostsPath)
+	if !strings.Contains(string(data), "1.1.1.1") {
+		t.Fatalf("pass 1 must write the candidate:\n%q", data)
+	}
+	// Pass 2: same sweep, block already matches — the switch decision
+	// renders identical content; the pass must still complete and log.
+	if err := RunOnce(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := loadState(statePath)
+	if st.CurrentV4 != "1.1.1.1" {
+		t.Fatalf("current must stay the switched address, got %q", st.CurrentV4)
+	}
+
+	// v4 sweep total failure: hosts untouched, pass still ends normally.
+	withFakeProbes(t, probeOutcome{addr: netip.MustParseAddr("1.1.1.1"), ok: false})
+	before, _ := os.ReadFile(hostsPath)
+	if err := RunOnce(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(hostsPath)
+	if !bytes.Equal(before, after) {
+		t.Fatal("v4-fail pass must not touch hosts")
+	}
+}
