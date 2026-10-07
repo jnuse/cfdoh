@@ -70,6 +70,9 @@ func Status() string {
 	} else {
 		fmt.Fprintf(&b, "lock: free\n")
 	}
+	if st.LogNote != "" {
+		fmt.Fprintf(&b, "log: %s\n", st.LogNote)
+	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -93,15 +96,28 @@ func stateDirOf(statePath string) string {
 
 var loggingOnce sync.Once
 
+// logHealth records the file-log outcome of this process (path + ok or the
+// failure); every pass copies it into the state file so status can show a
+// daemon whose file logging died silently.
+var logHealth string
+
 // logRotateSize is the size past which cfhost.log rotates to cfhost.log.1.
 const logRotateSize = 1 << 20
 
+// initLogging wires the rotating file log (stateDir/cfhost.log) plus
+// stderr through slog, once per process. The outcome — path plus ok or the
+// failure — is recorded in logHealth and carried into the state file by
+// every pass, so `cfhost status` can surface a daemon whose file logging
+// silently died (a service process cannot show its stderr to anyone).
 func initLogging(stateDir string) {
 	loggingOnce.Do(func() {
+		path := filepath.Join(stateDir, "cfhost.log")
 		w := io.Writer(os.Stderr)
 		if rw, err := openRotatingLog(stateDir); err != nil {
+			logHealth = fmt.Sprintf("%s (unavailable: %v)", path, err)
 			slog.Warn("cfhost: file logging unavailable", "error", err.Error())
 		} else {
+			logHealth = fmt.Sprintf("%s (ok)", path)
 			w = io.MultiWriter(os.Stderr, rw)
 		}
 		slog.SetDefault(slog.New(slog.NewTextHandler(w, nil)))

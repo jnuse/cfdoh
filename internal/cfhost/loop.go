@@ -27,6 +27,9 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 	initLogging(cfg.stateDir())
 
 	st, _ := loadState(cfg.StatePath)
+	// Surface this process's file-log health to `cfhost status` (a service
+	// daemon cannot show its stderr to anyone; see initLogging).
+	st.LogNote = logHealth
 
 	cands, allFailed := fetchCandidates(ctx, cfg.Sources, defaultFetcher, cfg.CandidateLimit)
 	if allFailed || len(cands) == 0 {

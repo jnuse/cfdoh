@@ -28,6 +28,7 @@ type clientState struct {
 	NextRun     int64    `json:"next_run"`
 	FailStreak  int      `json:"fail_streak"`
 	Candidates  []string `json:"candidates"`
+	LogNote     string   `json:"log_note,omitempty"` // file-log health of the last writing process
 }
 
 // loadState reads the state file; found is false only when the file does not
