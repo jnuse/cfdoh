@@ -90,10 +90,12 @@ func stateDirOf(statePath string) string {
 	return filepath.Dir(statePath)
 }
 
-// Logging: slog writes to stderr and to cfhost.log next to the state file.
-// The log rotates to .1 (one generation kept) past 1MiB, checked both at
-// startup and on every write, so long-running daemons rotate without a
-// restart. A file open failure falls back to stderr only.
+// Logging: slog writes to cfhost.log next to the state file first, then
+// to stderr on a best-effort basis (fileLogWriter — a dead stderr, e.g.
+// an SCM service process, must never starve the file log). The log rotates
+// to .1 (one generation kept) past 1MiB, checked both at startup and on
+// every write, so long-running daemons rotate without a restart. A file
+// open failure falls back to stderr only.
 
 var loggingOnce sync.Once
 
@@ -207,6 +209,19 @@ func (w *rotatingWriter) Write(p []byte) (int, error) {
 		logWriteErr.Store(err.Error())
 	}
 	return n, err
+}
+
+// Close closes the underlying file. The production writer lives for the
+// process lifetime; this exists for tests and future shutdown paths.
+func (w *rotatingWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.f == nil {
+		return nil
+	}
+	err := w.f.Close()
+	w.f = nil
+	return err
 }
 
 // fileLogWriter writes the durable file log first, then stderr on a

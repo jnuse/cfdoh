@@ -125,7 +125,7 @@ func TestFileLogWriterSurvivesDeadStderr(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rw.f.Close()
+	defer rw.Close()
 
 	// Swap in an unreadable-as-write stderr: a file opened read-only fails
 	// Write, standing in for the invalid service stderr handle.

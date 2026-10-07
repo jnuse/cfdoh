@@ -27,9 +27,6 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 	initLogging(cfg.stateDir())
 
 	st, _ := loadState(cfg.StatePath)
-	// Surface this process's file-log health to `cfhost status` (a service
-	// daemon cannot show its stderr to anyone; see initLogging).
-	st.LogNote = logNote()
 
 	cands, allFailed := fetchCandidates(ctx, cfg.Sources, defaultFetcher, cfg.CandidateLimit)
 	if allFailed || len(cands) == 0 {
@@ -55,35 +52,43 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 	// this pass started (st.CurrentV4 is overwritten by the decision below).
 	oldCur := st.CurrentV4
 
-	now := time.Now()
-	st.NextRun = now.Add(cfg.Interval).Unix()
+	st.NextRun = time.Now().Add(cfg.Interval).Unix()
 	st.Candidates = addrStrings(cands)
 
 	// passDone emits the one-line per-pass summary: every pass logs exactly
 	// one line, so a silent gap in the log can only mean the process was not
 	// running. tested/ok describe the sweep, best_v4 the winner, decision
-	// the outcome (updated / forced / kept / v4-fail / skipped). It also
+	// the outcome (updated / forced / kept / v4-fail / skipped), extra the
+	// decision-specific tail (old=..., current=... gain=...). It also
 	// refreshes st.LogNote after the write so the state file carries this
 	// pass's log outcome — a pass-start snapshot would hide a failure that
 	// happened during this very pass until one pass later.
-	passDone := func(decision string) {
+	passDone := func(decision, extra string) {
 		best := "none 0ms"
 		if v4top != nil {
 			best = fmt.Sprintf("%s %dms", v4top.addr.String(), v4top.median.Milliseconds())
 		}
-		slog.Info("event", "event", "pass_done", "detail",
-			fmt.Sprintf("tested=%d ok=%d best_v4=%s decision=%s", len(cands), okCount, best, decision))
+		detail := fmt.Sprintf("tested=%d ok=%d best_v4=%s decision=%s", len(cands), okCount, best, decision)
+		if extra != "" {
+			detail += " " + extra
+		}
+		slog.Info("event", "event", "pass_done", "detail", detail)
 		st.LogNote = logNote()
+	}
+	// persist saves the state file; a save failure must never fail the
+	// pass — the daemon retries next cycle.
+	persist := func() {
+		if err := saveState(cfg.StatePath, st); err != nil {
+			slog.Warn("cfhost: state save failed", "error", err.Error())
+		}
 	}
 
 	if v4top == nil {
 		// Full v4 sweep failure: keep hosts as-is (PRD F-024).
 		st.FailStreak++
 		st.LastSummary = fmt.Sprintf("tested=%d ok=%d best_v4=none 0ms", len(cands), okCount)
-		passDone("v4-fail")
-		if err := saveState(cfg.StatePath, st); err != nil {
-			slog.Warn("cfhost: state save failed", "error", err.Error())
-		}
+		passDone("v4-fail", "")
+		persist()
 		return nil
 	}
 
@@ -116,10 +121,8 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 		// the scheduled next run persists so the daemon stays alive and
 		// retries next cycle. A hosts write failure must never terminate the
 		// daemon.
-		passDone("skipped")
-		if serr := saveState(cfg.StatePath, st); serr != nil {
-			slog.Warn("cfhost: state save failed", "error", serr.Error())
-		}
+		passDone("skipped", "")
+		persist()
 		return nil
 	}
 	st.FailStreak = streak
@@ -138,29 +141,20 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 	// decision detail: what changed and against which baseline
 	switch {
 	case forced:
-		slog.Info("event", "event", "pass_done", "detail",
-			fmt.Sprintf("tested=%d ok=%d best_v4=%s %dms decision=forced old=%s (fail-streak)",
-				len(cands), okCount, v4top.addr.String(), v4top.median.Milliseconds(), oldCur))
+		passDone("forced", fmt.Sprintf("old=%s (fail-streak)", oldCur))
 	case keepV4:
 		gain := 0.0
 		if curV4Median > 0 {
 			gain = (float64(curV4Median-v4top.median) / float64(curV4Median)) * 100
 		}
-		slog.Info("event", "event", "pass_done", "detail",
-			fmt.Sprintf("tested=%d ok=%d best_v4=%s %dms decision=kept current=%s gain=%.1f%%",
-				len(cands), okCount, v4top.addr.String(), v4top.median.Milliseconds(), oldCur, gain))
+		passDone("kept", fmt.Sprintf("current=%s gain=%.1f%%", oldCur, gain))
 	default:
 		// a switch decision: the block was written, or the rendered block
 		// already matched the file (a state/file reconciliation pass)
-		slog.Info("event", "event", "pass_done", "detail",
-			fmt.Sprintf("tested=%d ok=%d best_v4=%s %dms decision=updated old=%s",
-				len(cands), okCount, v4top.addr.String(), v4top.median.Milliseconds(), oldCur))
+		passDone("updated", fmt.Sprintf("old=%s", oldCur))
 	}
 
-	st.LogNote = logNote()
-	if err := saveState(cfg.StatePath, st); err != nil {
-		slog.Warn("cfhost: state save failed", "error", err.Error())
-	}
+	persist()
 	return nil
 }
 

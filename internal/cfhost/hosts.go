@@ -6,13 +6,12 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"time"
-
-	"net/netip"
 )
 
 // Hosts block management: only the marked block (# BEGIN cfhost .. # END

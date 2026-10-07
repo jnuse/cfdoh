@@ -182,26 +182,20 @@ func applyEnv(cfg *Config) error {
 	if v, ok := os.LookupEnv("CFHOST_SOURCES"); ok && strings.TrimSpace(v) != "" {
 		cfg.Sources = splitSourceList(v)
 	}
-	if v, ok := os.LookupEnv("CFHOST_CONCURRENCY"); ok && v != "" {
-		n, err := strconv.Atoi(strings.TrimSpace(v))
-		if err != nil {
-			return fmt.Errorf("cfhost: CFHOST_CONCURRENCY: %w", err)
+	for _, o := range []struct {
+		name string
+		set  func(int)
+	}{
+		{"CFHOST_CONCURRENCY", func(n int) { cfg.Concurrency = n }},
+		{"CFHOST_TIMEOUT_MS", func(n int) { cfg.Timeout = n }},
+		{"CFHOST_ROUNDS", func(n int) { cfg.Rounds = n }},
+		{"CFHOST_FAILOVER_ROUNDS", func(n int) { cfg.FailoverRounds = n }},
+		{"CFHOST_INTERVAL_MIN", func(n int) { cfg.Interval = time.Duration(n) * time.Minute }},
+		{"CFHOST_CANDIDATE_LIMIT", func(n int) { cfg.CandidateLimit = n }},
+	} {
+		if err := envInt(o.name, o.set); err != nil {
+			return err
 		}
-		cfg.Concurrency = n
-	}
-	if v, ok := os.LookupEnv("CFHOST_TIMEOUT_MS"); ok && v != "" {
-		n, err := strconv.Atoi(strings.TrimSpace(v))
-		if err != nil {
-			return fmt.Errorf("cfhost: CFHOST_TIMEOUT_MS: %w", err)
-		}
-		cfg.Timeout = n
-	}
-	if v, ok := os.LookupEnv("CFHOST_ROUNDS"); ok && v != "" {
-		n, err := strconv.Atoi(strings.TrimSpace(v))
-		if err != nil {
-			return fmt.Errorf("cfhost: CFHOST_ROUNDS: %w", err)
-		}
-		cfg.Rounds = n
 	}
 	if v, ok := os.LookupEnv("CFHOST_HYSTERESIS"); ok && v != "" {
 		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
@@ -210,32 +204,11 @@ func applyEnv(cfg *Config) error {
 		}
 		cfg.Hysteresis = f
 	}
-	if v, ok := os.LookupEnv("CFHOST_FAILOVER_ROUNDS"); ok && v != "" {
-		n, err := strconv.Atoi(strings.TrimSpace(v))
-		if err != nil {
-			return fmt.Errorf("cfhost: CFHOST_FAILOVER_ROUNDS: %w", err)
-		}
-		cfg.FailoverRounds = n
-	}
-	if v, ok := os.LookupEnv("CFHOST_INTERVAL_MIN"); ok && v != "" {
-		n, err := strconv.Atoi(strings.TrimSpace(v))
-		if err != nil {
-			return fmt.Errorf("cfhost: CFHOST_INTERVAL_MIN: %w", err)
-		}
-		cfg.Interval = time.Duration(n) * time.Minute
-	}
 	if v, ok := os.LookupEnv("CFHOST_HOSTS_PATH"); ok && v != "" {
 		cfg.HostsPath = strings.TrimSpace(v)
 	}
 	if v, ok := os.LookupEnv("CFHOST_STATE_PATH"); ok && v != "" {
 		cfg.StatePath = strings.TrimSpace(v)
-	}
-	if v, ok := os.LookupEnv("CFHOST_CANDIDATE_LIMIT"); ok && v != "" {
-		n, err := strconv.Atoi(strings.TrimSpace(v))
-		if err != nil {
-			return fmt.Errorf("cfhost: CFHOST_CANDIDATE_LIMIT: %w", err)
-		}
-		cfg.CandidateLimit = n
 	}
 	if v, ok := os.LookupEnv("CFHOST_HTTP_VERIFY"); ok && v != "" {
 		b, err := parseLooseBool(v)
@@ -244,6 +217,21 @@ func applyEnv(cfg *Config) error {
 		}
 		cfg.HTTPVerify = b
 	}
+	return nil
+}
+
+// envInt applies an integer CFHOST_* override; unset or empty keeps the
+// current value.
+func envInt(name string, set func(int)) error {
+	v, ok := os.LookupEnv(name)
+	if !ok || v == "" {
+		return nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return fmt.Errorf("cfhost: %s: %w", name, err)
+	}
+	set(n)
 	return nil
 }
 
