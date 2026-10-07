@@ -123,6 +123,21 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 	return nil
 }
 
+// RunOnceLocked runs one pass under the single-instance lock. run-once
+// shares the state file and hosts with the daemon; without the lock two
+// processes race (state file last-writer-wins, hosts last-rename-wins) and
+// can tear the recorded current address away from the hosts block. A live
+// holder (daemon or another run-once) refuses the run; a stale lock is
+// taken over — matching daemon startup semantics.
+func RunOnceLocked(ctx context.Context, cfg *Config) error {
+	release, err := acquireLock(cfg.StatePath)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return RunOnce(ctx, cfg)
+}
+
 // RunLoop acquires the single-instance lock and repeats RunOnce passes,
 // sleeping until next_run between passes. On Windows, when started by the
 // service manager it runs inside the service control loop instead.

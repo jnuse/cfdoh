@@ -307,3 +307,37 @@ func TestRunOnceProbeFailureKeepsHosts(t *testing.T) {
 		t.Fatalf("candidates should persist for fallback: %v", st.Candidates)
 	}
 }
+
+func TestRunOnceLockedRefusesWhileHeld(t *testing.T) {
+	// run-once shares the single-instance lock with the daemon: while a
+	// live holder keeps it, RunOnceLocked refuses without running a pass;
+	// once free, the pass runs to completion and releases the lock again
+	// (a stale lock from a dead holder is taken over by acquireLock).
+	dir := t.TempDir()
+	hostsPath := filepath.Join(dir, "hosts")
+	statePath := filepath.Join(dir, "state.json")
+	cfg := testConfig(t, hostsPath, statePath, "list:1.1.1.1")
+
+	release, err := acquireLock(statePath)
+	if err != nil {
+		t.Fatalf("seed lock: %v", err)
+	}
+	if err := RunOnceLocked(context.Background(), cfg); err == nil ||
+		!strings.Contains(err.Error(), "another cfhost instance") {
+		t.Fatalf("run-once under a live lock must refuse, got %v", err)
+	}
+	release()
+
+	cand := netip.MustParseAddr("1.1.1.1")
+	withFakeProbes(t, probeOutcome{addr: cand, median: 10 * time.Millisecond, ok: true})
+	if err := RunOnceLocked(context.Background(), cfg); err != nil {
+		t.Fatalf("RunOnceLocked after release: %v", err)
+	}
+	st, found := loadState(statePath)
+	if !found || st.CurrentV4 != "1.1.1.1" {
+		t.Fatalf("pass must run under the lock, state=%+v found=%v", st, found)
+	}
+	if _, err := acquireLock(statePath); err != nil {
+		t.Fatalf("lock must be free after RunOnceLocked: %v", err)
+	}
+}

@@ -58,7 +58,7 @@ func dispatch(name string) {
 		if err != nil {
 			exit(err)
 		}
-		exit(cfhost.RunOnce(context.Background(), cfg))
+		exit(cfhost.RunOnceLocked(context.Background(), cfg))
 	case "status":
 		fmt.Print(cfhost.Status())
 		return
