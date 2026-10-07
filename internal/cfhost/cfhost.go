@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -101,6 +102,20 @@ var loggingOnce sync.Once
 // daemon whose file logging died silently.
 var logHealth string
 
+// logWriteErr holds the last log write failure (antivirus blocks can pass
+// open but drop writes; slog itself swallows writer errors).
+var logWriteErr atomic.Value // string
+
+// logNote renders the current file-log health for the state file: the open
+// outcome plus the last write failure when one landed.
+func logNote() string {
+	note := logHealth
+	if v, ok := logWriteErr.Load().(string); ok && v != "" {
+		note = fmt.Sprintf("%s (write failed: %s)", strings.TrimSpace(strings.TrimSuffix(logHealth, " (ok)")), v)
+	}
+	return note
+}
+
 // logRotateSize is the size past which cfhost.log rotates to cfhost.log.1.
 const logRotateSize = 1 << 20
 
@@ -176,6 +191,12 @@ func (w *rotatingWriter) Write(p []byte) (int, error) {
 	}
 	n, err := w.f.Write(p)
 	w.size += int64(n)
+	if err != nil {
+		// slog silently drops writer errors; record the last failure so
+		// `cfhost status` can expose a log that opens fine but never lands
+		// (the observed antivirus write-block signature).
+		logWriteErr.Store(err.Error())
+	}
 	return n, err
 }
 
