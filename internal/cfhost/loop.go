@@ -62,7 +62,10 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 	// passDone emits the one-line per-pass summary: every pass logs exactly
 	// one line, so a silent gap in the log can only mean the process was not
 	// running. tested/ok describe the sweep, best_v4 the winner, decision
-	// the outcome (updated / forced / kept / v4-fail / skipped).
+	// the outcome (updated / forced / kept / v4-fail / skipped). It also
+	// refreshes st.LogNote after the write so the state file carries this
+	// pass's log outcome — a pass-start snapshot would hide a failure that
+	// happened during this very pass until one pass later.
 	passDone := func(decision string) {
 		best := "none 0ms"
 		if v4top != nil {
@@ -70,16 +73,17 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 		}
 		slog.Info("event", "event", "pass_done", "detail",
 			fmt.Sprintf("tested=%d ok=%d best_v4=%s decision=%s", len(cands), okCount, best, decision))
+		st.LogNote = logNote()
 	}
 
 	if v4top == nil {
 		// Full v4 sweep failure: keep hosts as-is (PRD F-024).
 		st.FailStreak++
 		st.LastSummary = fmt.Sprintf("tested=%d ok=%d best_v4=none 0ms", len(cands), okCount)
+		passDone("v4-fail")
 		if err := saveState(cfg.StatePath, st); err != nil {
 			slog.Warn("cfhost: state save failed", "error", err.Error())
 		}
-		passDone("v4-fail")
 		return nil
 	}
 
@@ -112,10 +116,10 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 		// the scheduled next run persists so the daemon stays alive and
 		// retries next cycle. A hosts write failure must never terminate the
 		// daemon.
+		passDone("skipped")
 		if serr := saveState(cfg.StatePath, st); serr != nil {
 			slog.Warn("cfhost: state save failed", "error", serr.Error())
 		}
-		passDone("skipped")
 		return nil
 	}
 	st.FailStreak = streak
@@ -153,6 +157,7 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 				len(cands), okCount, v4top.addr.String(), v4top.median.Milliseconds(), oldCur))
 	}
 
+	st.LogNote = logNote()
 	if err := saveState(cfg.StatePath, st); err != nil {
 		slog.Warn("cfhost: state save failed", "error", err.Error())
 	}

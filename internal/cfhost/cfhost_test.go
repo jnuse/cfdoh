@@ -113,3 +113,50 @@ func TestOpenRotatingLogRotatesOversizedStartupFile(t *testing.T) {
 		t.Fatalf("fresh log wrong: %q", data)
 	}
 }
+
+func TestFileLogWriterSurvivesDeadStderr(t *testing.T) {
+	// Regression for the service-form silent-log bug: with io.MultiWriter a
+	// dead stderr (an SCM service process has no console) short-circuits the
+	// file sink and every log line is lost. fileLogWriter must write the
+	// file first and treat stderr as best-effort.
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "cfhost.log")
+	rw, err := newRotatingWriter(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rw.f.Close()
+
+	// Swap in an unreadable-as-write stderr: a file opened read-only fails
+	// Write, standing in for the invalid service stderr handle.
+	roPath := filepath.Join(dir, "fake-stderr")
+	if err := os.WriteFile(roPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ro, err := os.Open(roPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	oldStderr := os.Stderr
+	os.Stderr = ro
+	defer func() { os.Stderr = oldStderr }()
+	defer logStderrDead.Store(false)
+
+	w := fileLogWriter{file: rw}
+	line := []byte("time=... level=INFO msg=event event=pass_done\n")
+	n, err := w.Write(line)
+	if err != nil || n != len(line) {
+		t.Fatalf("file write must succeed despite dead stderr: n=%d err=%v", n, err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil || !bytes.Equal(data, line) {
+		t.Fatalf("log line must land in the file, got %q err=%v", data, err)
+	}
+	if !logStderrDead.Load() {
+		t.Fatal("dead stderr should be recorded in logStderrDead")
+	}
+	if note := logNote(); !strings.Contains(note, "(stderr dead)") {
+		t.Fatalf("log note should surface the dead stderr, got %q", note)
+	}
+}

@@ -106,12 +106,21 @@ var logHealth string
 // open but drop writes; slog itself swallows writer errors).
 var logWriteErr atomic.Value // string
 
+// logStderrDead records that writing stderr failed at least once: an SCM
+// service process has no console and its stderr handle may be invalid,
+// which is expected in service form — but it must stay visible in the log
+// note so a "file ok" status cannot masquerade as "everything ok".
+var logStderrDead atomic.Bool
+
 // logNote renders the current file-log health for the state file: the open
 // outcome plus the last write failure when one landed.
 func logNote() string {
 	note := logHealth
 	if v, ok := logWriteErr.Load().(string); ok && v != "" {
 		note = fmt.Sprintf("%s (write failed: %s)", strings.TrimSpace(strings.TrimSuffix(logHealth, " (ok)")), v)
+	}
+	if logStderrDead.Load() {
+		note += " (stderr dead)"
 	}
 	return note
 }
@@ -133,7 +142,7 @@ func initLogging(stateDir string) {
 			slog.Warn("cfhost: file logging unavailable", "error", err.Error())
 		} else {
 			logHealth = fmt.Sprintf("%s (ok)", path)
-			w = io.MultiWriter(os.Stderr, rw)
+			w = fileLogWriter{file: rw}
 		}
 		slog.SetDefault(slog.New(slog.NewTextHandler(w, nil)))
 	})
@@ -196,6 +205,26 @@ func (w *rotatingWriter) Write(p []byte) (int, error) {
 		// `cfhost status` can expose a log that opens fine but never lands
 		// (the observed antivirus write-block signature).
 		logWriteErr.Store(err.Error())
+	}
+	return n, err
+}
+
+// fileLogWriter writes the durable file log first, then stderr on a
+// best-effort basis. io.MultiWriter is wrong here in both orders: with
+// stderr first, a dead stderr — an SCM service process has no console, so
+// its stderr handle can be invalid — fails the first station and silently
+// starves the file sink forever (slog swallows the error, so nothing shows);
+// with the file first, a harmless stderr failure would still propagate to
+// slog. The file outcome is returned; a stderr failure is dropped (and
+// recorded in logStderrDead for the status note).
+type fileLogWriter struct {
+	file *rotatingWriter
+}
+
+func (w fileLogWriter) Write(p []byte) (int, error) {
+	n, err := w.file.Write(p)
+	if _, serr := os.Stderr.Write(p); serr != nil {
+		logStderrDead.Store(true)
 	}
 	return n, err
 }
