@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"reflect"
 	"time"
 )
 
@@ -154,6 +155,7 @@ func loopWithLock(ctx context.Context, cfg *Config) error {
 	}
 	defer release()
 	for {
+		cfg = reloadConfig(cfg)
 		if err := RunOnce(ctx, cfg); err != nil {
 			return err
 		}
@@ -166,6 +168,30 @@ func loopWithLock(ctx context.Context, cfg *Config) error {
 		case <-timer.C:
 		}
 	}
+}
+
+// reloadConfig refreshes the configuration before each daemon pass so
+// cfhost.json edits apply without a restart (run-once reads fresh on every
+// invocation by nature). A failed or invalid reload keeps the previous
+// configuration for this pass — a broken file must never kill the daemon.
+// A reload that moves StatePath or HostsPath is refused with a warning:
+// the running lock and the hosts anchor belong to the startup
+// configuration; relocating them requires a restart.
+func reloadConfig(cur *Config) *Config {
+	fresh, err := LoadConfig()
+	if err != nil {
+		slog.Warn("cfhost: config reload failed, keeping the previous configuration", "error", err.Error())
+		return cur
+	}
+	if fresh.StatePath != cur.StatePath || fresh.HostsPath != cur.HostsPath {
+		slog.Warn("cfhost: config reload wants a new StatePath/HostsPath; restart to apply, keeping the previous configuration",
+			"state_path", fresh.StatePath, "hosts_path", fresh.HostsPath)
+		return cur
+	}
+	if !reflect.DeepEqual(fresh, cur) {
+		slog.Info("event", "event", "config_reloaded", "detail", "cfhost.json changed; applied from this pass")
+	}
+	return fresh
 }
 
 // nextDelay returns how long the loop sleeps before the next pass. A

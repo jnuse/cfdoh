@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -339,5 +340,71 @@ func TestRunOnceLockedRefusesWhileHeld(t *testing.T) {
 	}
 	if _, err := acquireLock(statePath); err != nil {
 		t.Fatalf("lock must be free after RunOnceLocked: %v", err)
+	}
+}
+
+func TestLoopReloadsConfigEachPass(t *testing.T) {
+	// The daemon refreshes cfhost.json before every pass: an edit (a new
+	// managed domain) applies on the next round without a restart; a broken
+	// file keeps the previous configuration; a relocated StatePath or
+	// HostsPath is refused and needs a restart.
+	dir := t.TempDir()
+	hostsPath := filepath.Join(dir, "hosts")
+	statePath := filepath.Join(dir, "state.json")
+	configFile := filepath.Join(dir, "cfhost.json")
+	t.Setenv("CFHOST_CONFIG", configFile)
+	t.Setenv("CFHOST_STATE_PATH", statePath)
+
+	writeCfg := func(domains string) {
+		body := fmt.Sprintf(`{"sources":["list:1.1.1.1"],"managed_domains":[%q],"hosts_path":%q}`,
+			domains, hostsPath)
+		if err := os.WriteFile(configFile, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeCfg("a.example.com")
+
+	cand := netip.MustParseAddr("1.1.1.1")
+	withFakeProbes(t, probeOutcome{addr: cand, median: 10 * time.Millisecond, ok: true})
+	withHostsSeams(t,
+		func() string { return "" },
+		func(a, b string) bool { return false },
+		func(oldpath, newpath string) error { return os.Rename(oldpath, newpath) },
+		func(err error) bool { return false },
+		0)
+
+	// One pass under the initial config, then edit and pass again: the
+	// hosts block must carry the new domain without any restart.
+	for _, domain := range []string{"a.example.com", "b.example.com"} {
+		cfg, err := LoadConfig()
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if err := RunOnceLocked(context.Background(), cfg); err != nil {
+			t.Fatalf("pass for %s: %v", domain, err)
+		}
+		data, _ := os.ReadFile(hostsPath)
+		if !strings.Contains(string(data), domain) {
+			t.Fatalf("hosts must carry %s after its pass:\n%q", domain, data)
+		}
+		if domain == "a.example.com" {
+			writeCfg("b.example.com")
+		}
+	}
+
+	// Broken file: reload keeps the previous (working) configuration.
+	cur, _ := LoadConfig()
+	if err := os.WriteFile(configFile, []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := reloadConfig(cur); got.ManagedDomains[0] != "b.example.com" {
+		t.Fatalf("broken reload must keep the previous config, got %+v", got.ManagedDomains)
+	}
+
+	// Relocated state path: refused, previous config kept.
+	writeCfg("b.example.com")
+	t.Setenv("CFHOST_STATE_PATH", filepath.Join(dir, "moved-state.json"))
+	if got := reloadConfig(cur); got.StatePath != statePath {
+		t.Fatalf("state path relocation must be refused until restart, got %q", got.StatePath)
 	}
 }
