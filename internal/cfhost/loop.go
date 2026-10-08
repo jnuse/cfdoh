@@ -147,7 +147,20 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 		if curV4Median > 0 {
 			gain = (float64(curV4Median-v4top.median) / float64(curV4Median)) * 100
 		}
-		passDone("kept", fmt.Sprintf("current=%s gain=%.1f%%", oldCur, gain))
+		extra := fmt.Sprintf("current=%s gain=%.1f%%", oldCur, gain)
+		// A kept pass must say why the current address survived: probed and
+		// alive (real gain), probed and failed (current_dead), or never
+		// returned by the sources (current_absent — a gain of 0.0% alone is
+		// ambiguous between "best is the current itself" and "current was
+		// never measured").
+		if !curV4Alive {
+			if _, probed := byAddr[curV4.Unmap()]; !probed {
+				extra += " current_absent=1"
+			} else {
+				extra += " current_dead=1"
+			}
+		}
+		passDone("kept", extra)
 	default:
 		// a switch decision: the block was written, or the rendered block
 		// already matched the file (a state/file reconciliation pass)
