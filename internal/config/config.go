@@ -88,6 +88,11 @@ type IspSource struct {
 	URL  string
 }
 
+// defaultEcsDomainsURL is the built-in dynamic ECS domain table: the
+// community-maintained dnsmasq-china-list accelerated-domains set. Set
+// ECS_DOMAINS_URL to an explicit empty value to disable the dynamic table.
+const defaultEcsDomainsURL = "https://raw.githubusercontent.com/felixonmars/dnsmasq-china-list/master/accelerated-domains.china.alidns.txt"
+
 // parseIspSources splits "name=url" comma entries; malformed entries and
 // non-https URLs are dropped. Name legality is enforced later by the
 // table parser (rows with an invalid name are skipped), so no rule is
@@ -261,7 +266,7 @@ func Load() (*Config, error) {
 	cfg.CFIPv6URL = src.str("CF_IPV6_URL", "https://www.cloudflare.com/ips-v6")
 	cfg.RulesJSON = src.str("RULES_JSON", "[]")
 	cfg.RulesURL = src.str("RULES_URL", "")
-	cfg.EcsDomainsURL = src.str("ECS_DOMAINS_URL", "")
+	cfg.EcsDomainsURL = src.str("ECS_DOMAINS_URL", defaultEcsDomainsURL)
 	cfg.EchEnabled = src.boolValue("ECH_ENABLED", false)
 	cfg.EchConfigBase64 = src.str("ECH_CONFIG_BASE64", "")
 	cfg.EchDomains = lowerList(src.strList("ECH_DOMAINS", ""))

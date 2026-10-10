@@ -16,6 +16,7 @@ func loadClean(t *testing.T) *Config {
 		"POOL_FEED_URL", "POOL_FEED_INTERVAL_SEC", "POOL_FEED_TTL_SEC",
 		"HOST", "PORT", "PUBLIC_HOSTNAMES", "MAX_DNS_PACKET_SIZE", "DYNAMIC_RULES_MAX_BYTES",
 		"CACHE_MAX_ENTRIES", "ADMIN_TOKEN", "HUB_TOKEN", "CFDOH_CONFIG", "RULES_JSON",
+		"ECS_DOMAINS_URL",
 	} {
 		os.Unsetenv(name)
 	}
@@ -289,4 +290,25 @@ func TestIspSourcesDefaultsAndModes(t *testing.T) {
 				cfg.IspTableURL, len(cfg.IspSources))
 		}
 	})
+}
+
+func TestEcsDomainsURLDefaultAndOptOut(t *testing.T) {
+	os.Unsetenv("ECS_DOMAINS_URL")
+	// Unset: the built-in community table (same policy as ISP_SOURCES).
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EcsDomainsURL != defaultEcsDomainsURL {
+		t.Fatalf("default ECS_DOMAINS_URL = %q, want the built-in chnlist URL", cfg.EcsDomainsURL)
+	}
+	// Explicitly empty: the dynamic table is off.
+	t.Setenv("ECS_DOMAINS_URL", "")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EcsDomainsURL != "" {
+		t.Fatalf("empty ECS_DOMAINS_URL must disable the dynamic table, got %q", cfg.EcsDomainsURL)
+	}
 }
