@@ -91,7 +91,7 @@ type IspSource struct {
 // defaultEcsDomainsURL is the built-in dynamic ECS domain table: the
 // community-maintained dnsmasq-china-list accelerated-domains set. Set
 // ECS_DOMAINS_URL to an explicit empty value to disable the dynamic table.
-const defaultEcsDomainsURL = "https://raw.githubusercontent.com/felixonmars/dnsmasq-china-list/master/accelerated-domains.china.alidns.txt"
+const defaultEcsDomainsURL = "https://raw.githubusercontent.com/felixonmars/dnsmasq-china-list/master/accelerated-domains.china.conf"
 
 // parseIspSources splits "name=url" comma entries; malformed entries and
 // non-https URLs are dropped. Name legality is enforced later by the

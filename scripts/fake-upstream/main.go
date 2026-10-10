@@ -89,11 +89,28 @@ func main() {
 			http.Error(w, "read failed", http.StatusBadRequest)
 			return
 		}
-		q, err := wire.Parse(body)
-		if err != nil {
+		parsed, perr := wire.Parse(body)
+		if perr != nil {
 			http.Error(w, "malformed query", http.StatusBadRequest)
 			return
 		}
+		hasECS := false
+		for i := range parsed.Additionals {
+			if opt, ok := parsed.Additionals[i].RData.(wire.Opt); ok {
+				for _, o := range opt.Options {
+					if o.Code == 8 { // EDNS Client Subnet
+						hasECS = true
+					}
+				}
+			}
+		}
+		qname := "?"
+		qtype := 0
+		if len(parsed.Questions) > 0 {
+			qname = parsed.Questions[0].Name
+			qtype = int(parsed.Questions[0].Type)
+		}
+		log.Printf("query name=%s type=%d ecs=%v", qname, qtype, hasECS)
 		if *delayMs > 0 {
 			d := time.Duration(*delayMs) * time.Millisecond
 			if *jitterMs > 0 {
@@ -101,7 +118,7 @@ func main() {
 			}
 			time.Sleep(d)
 		}
-		resp, err := answer(q)
+		resp, err := answer(parsed)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
