@@ -380,17 +380,29 @@ func applyRewriteChain(ctx context.Context, plan *fullPlan, resp *wire.Packet, c
 		if classified != nil {
 			return *classified
 		}
-		v4, v6 := upstreamV4, upstreamV6
-		if len(v4) == 0 && len(v6) == 0 {
-			if rv4, rv6, rerr := upstream.ResolveAddresses(ctx, qname, cfg); rerr == nil {
-				v4, v6 = rv4, rv6
-			}
-		}
-		onCF, err := rewrite.OnCloudflare(ctx, qname, ranges, cfg, v4, v6)
-		if err != nil {
-			note(notes, "cloudflare: determination failed (%v), treated as not Cloudflare", err)
+		onCF := false
+		if upstreamUsesCF {
+			// The answer-local check already saw an address (A/AAAA or HTTPS
+			// hint) inside the published ranges: Cloudflare settles here with
+			// no outbound lookup — on the HTTPS path this is what keeps a
+			// cache miss from stacking a follow-up A/AAAA resolve (two more
+			// upstream round trips) behind the main query.
+			onCF = true
+			note(notes, "cloudflare: true (answer-local hints)")
 		} else {
-			note(notes, "cloudflare: %t (upstream v4=%v v6=%v)", onCF, v4, v6)
+			v4, v6 := upstreamV4, upstreamV6
+			if len(v4) == 0 && len(v6) == 0 {
+				if rv4, rv6, rerr := upstream.ResolveAddresses(ctx, qname, cfg); rerr == nil {
+					v4, v6 = rv4, rv6
+				}
+			}
+			var err error
+			onCF, err = rewrite.OnCloudflare(ctx, qname, ranges, cfg, v4, v6)
+			if err != nil {
+				note(notes, "cloudflare: determination failed (%v), treated as not Cloudflare", err)
+			} else {
+				note(notes, "cloudflare: %t (upstream v4=%v v6=%v)", onCF, v4, v6)
+			}
 		}
 		classified = &onCF
 		return onCF

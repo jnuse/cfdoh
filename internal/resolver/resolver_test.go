@@ -823,3 +823,43 @@ func TestResolvePoolUploadInvalidatesCacheKey(t *testing.T) {
 		t.Fatalf("upstream hits = %d after a no-flip repeat, want 2 (cache hit)", hits.Load())
 	}
 }
+
+func TestResolveClassifySettlesOnHintsWithoutLookup(t *testing.T) {
+	// An HTTPS answer whose address hints sit inside the published
+	// Cloudflare ranges settles the classification locally: the pass must
+	// not stack a follow-up A/AAAA resolve (two upstream round trips)
+	// behind the main query — the HTTPS-miss tail that tripped the
+	// Chromium 1137ms DNS task timeout in the field.
+	resetCache()
+	loadRanges(t)
+	var addrLookups atomic.Int64
+	srv, _ := newFakeUpstream(t, func(q *wire.Packet) *wire.Packet {
+		resp := &wire.Packet{Header: wire.Header{ID: q.Header.ID, Flags: 0x8180}, Questions: q.Questions}
+		question := q.Questions[0]
+		switch question.Type {
+		case wire.TypeA, wire.TypeAAAA:
+			addrLookups.Add(1)
+		case wire.TypeHTTPS:
+			resp.Answers = append(resp.Answers, httpsHintRec(question.Name, "104.16.1.1", 60))
+		}
+		return resp
+	})
+	cfg := baseCfg(srv.URL)
+	cfg.EchEnabled = true
+	cfg.EchSourceDomain = "ech-source.test"
+
+	answer, err := Resolve(context.Background(), buildQuery(7, "hinted.example", wire.TypeHTTPS), &Options{}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := wire.Parse(answer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findHTTPS(parsed) == nil {
+		t.Fatal("HTTPS record missing from answer")
+	}
+	if n := addrLookups.Load(); n != 0 {
+		t.Fatalf("classify must settle on CF-range hints without A/AAAA lookups, got %d outbound address queries", n)
+	}
+}

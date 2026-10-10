@@ -35,10 +35,24 @@ type Result struct {
 }
 
 // httpClient never follows redirects; upstream redirect responses surface as
-// non-2xx failures.
+// non-2xx failures. The custom transport keeps a real connection pool per
+// upstream host: the default transport's MaxIdleConnsPerHost of 2 forces a
+// fresh TLS handshake on nearly every concurrent exchange against the same
+// upstream, and that handshake cost lands directly on the query tail
+// (ForceAttemptHTTP2 is required for h2 negotiation on an explicit
+// Transport).
 var httpClient = &http.Client{
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
+	},
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          128,
+		MaxIdleConnsPerHost:   32,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
 	},
 }
 
