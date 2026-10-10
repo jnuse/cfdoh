@@ -38,9 +38,9 @@ import (
 type sample struct {
 	qtype  string
 	dur    time.Duration
-	status int        // HTTP status; 0 on transport error/timeout
-	err    string     // non-empty on failure
-	slow   bool       // duration exceeded the slow threshold
+	status int    // HTTP status; 0 on transport error/timeout
+	err    string // non-empty on failure
+	slow   bool   // duration exceeded the slow threshold
 }
 
 type mixEntry struct {
@@ -82,7 +82,10 @@ func main() {
 		},
 	}
 
-	type task struct{ name string; t uint16 }
+	type task struct {
+		name string
+		t    uint16
+	}
 	tasks := make(chan task)
 	var mu sync.Mutex
 	var samples []sample

@@ -63,7 +63,7 @@ func answer(q *wire.Packet) (*wire.Packet, error) {
 					{Key: wire.ParamECH, Value: echConfigList},
 					{Key: wire.ParamIPv4Hint, Value: v4[:]},
 					{Key: wire.ParamIPv6Hint, Value: v6[:]},
-			}},
+				}},
 		}}
 	}
 	return resp, nil

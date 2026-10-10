@@ -59,7 +59,8 @@ func Make(clientIP string, v4Prefix, v6Prefix int) *Value {
 
 // ShouldUse decides whether the outbound query carries ECS. A rule override
 // (present) wins over the configured mode; rules mode matches the question
-// name against ECS_DOMAINS by suffix.
+// name against the static ECS_DOMAINS list plus the dynamic ECS_DOMAINS_URL
+// table (either hit attaches ECS).
 func ShouldUse(q *wire.Packet, cfg *config.Config, override, present bool) bool {
 	if present {
 		return override
@@ -73,7 +74,8 @@ func ShouldUse(q *wire.Packet, cfg *config.Config, override, present bool) bool 
 	if len(q.Questions) == 0 {
 		return false
 	}
-	return domainMatches(q.Questions[0].Name, cfg.EcsDomains)
+	name := q.Questions[0].Name
+	return domainMatches(name, cfg.EcsDomains) || MatchDynamic(name)
 }
 
 // Add returns a packet with the ECS option replaced (idempotent) or injected.

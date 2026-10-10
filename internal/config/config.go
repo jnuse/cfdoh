@@ -24,6 +24,7 @@ type Config struct {
 	CacheStaleTTL        int
 	CachePrefetchPercent int
 	EcsMode              string
+	EcsDomainsURL        string
 	EcsDomains           []string
 	EcsIPv4Prefix        int
 	EcsIPv6Prefix        int
@@ -260,6 +261,7 @@ func Load() (*Config, error) {
 	cfg.CFIPv6URL = src.str("CF_IPV6_URL", "https://www.cloudflare.com/ips-v6")
 	cfg.RulesJSON = src.str("RULES_JSON", "[]")
 	cfg.RulesURL = src.str("RULES_URL", "")
+	cfg.EcsDomainsURL = src.str("ECS_DOMAINS_URL", "")
 	cfg.EchEnabled = src.boolValue("ECH_ENABLED", false)
 	cfg.EchConfigBase64 = src.str("ECH_CONFIG_BASE64", "")
 	cfg.EchDomains = lowerList(src.strList("ECH_DOMAINS", ""))
@@ -309,7 +311,7 @@ func (c *Config) SanitizedSummary() string {
 	fmt.Fprintf(&sb, "timeout=%dms hedge=%dms\n", c.UpstreamTimeoutMs, c.UpstreamHedgeMs)
 	fmt.Fprintf(&sb, "cache ttl=%d..%d neg=%d stale=%d prefetch=%d%% entries=%d\n",
 		c.CacheMinTTL, c.CacheMaxTTL, c.NegativeCacheMaxTTL, c.CacheStaleTTL, c.CachePrefetchPercent, c.CacheMaxEntries)
-	fmt.Fprintf(&sb, "ecs mode=%s domains=%s v4/%d v6/%d\n", c.EcsMode, strings.Join(c.EcsDomains, ","), c.EcsIPv4Prefix, c.EcsIPv6Prefix)
+	fmt.Fprintf(&sb, "ecs mode=%s domains=%s domains_url=%s v4/%d v6/%d\n", c.EcsMode, strings.Join(c.EcsDomains, ","), configuredWord(c.EcsDomainsURL), c.EcsIPv4Prefix, c.EcsIPv6Prefix)
 	fmt.Fprintf(&sb, "rewrite=%v preferred_domain=%s drop_aaaa=%v\n", c.CFRewriteEnabled, strings.Join(c.CFPreferredDomain, ","), c.CFDropAAAA)
 	fmt.Fprintf(&sb, "admin_token=%s hub_token=%s doh_origin_token=%s\n", configuredWord(c.AdminToken), configuredWord(c.HubToken), configuredWord(c.DohOriginToken))
 	fmt.Fprintf(&sb, "isp_table=%s sources=%s\n", configuredWord(c.IspTableURL), ispSourcesWord(c))

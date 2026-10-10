@@ -17,6 +17,7 @@ import (
 	"github.com/jnuse/cfdoh/internal/cfrange"
 	"github.com/jnuse/cfdoh/internal/config"
 	"github.com/jnuse/cfdoh/internal/ech"
+	"github.com/jnuse/cfdoh/internal/ecs"
 	"github.com/jnuse/cfdoh/internal/h3"
 	"github.com/jnuse/cfdoh/internal/httpapi"
 	"github.com/jnuse/cfdoh/internal/hubfeed"
@@ -61,6 +62,16 @@ func run() error {
 	if _, err := cfrange.Load(ctx, cfg); err != nil {
 		slog.Warn("cloudflare ranges unavailable at boot", "error", err.Error())
 	}
+	// The dynamic ECS domain table loads synchronously at boot (a failed
+	// fetch keeps the previous/empty table and only logs) and refreshes on
+	// the daily schedule below.
+	if cfg.EcsDomainsURL != "" {
+		if n, err := ecs.LoadDomains(ctx, cfg.EcsDomainsURL, cfg); err != nil {
+			slog.Warn("ecs domain table unavailable at boot", "error", err.Error())
+		} else {
+			slog.Info("event", "event", "ecs_domains_loaded", "detail", fmt.Sprintf("entries=%d source=boot", n))
+		}
+	}
 	if cfg.CachePersistPath != "" {
 		if err := resolver.LoadCacheSnapshot(cfg.CachePersistPath, cfg); err != nil {
 			slog.Warn("cache snapshot not restored", "error", err.Error())
@@ -87,6 +98,15 @@ func run() error {
 			slog.Warn("cloudflare range refresh failed", "error", err.Error())
 		}
 	})
+	if cfg.EcsDomainsURL != "" {
+		go schedule(ctx, cfrangeRefreshInterval, false, func() {
+			if n, err := ecs.LoadDomains(ctx, cfg.EcsDomainsURL, cfg); err != nil {
+				slog.Warn("ecs domain table refresh failed, keeping the previous table", "error", err.Error())
+			} else {
+				slog.Info("event", "event", "ecs_domains_loaded", "detail", fmt.Sprintf("entries=%d source=scheduled", n))
+			}
+		})
+	}
 	if cfg.CachePersistPath != "" {
 		go schedule(ctx, cacheSnapshotInterval, false, func() {
 			if err := snapshotAll(cfg); err != nil {
