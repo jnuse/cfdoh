@@ -5,6 +5,7 @@ package cfhost
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -61,7 +62,20 @@ func hostsPreserveACLDefault(tmpName, origPath string) error {
 		if err != nil {
 			return fmt.Errorf("read original hosts dacl: %w", err)
 		}
-		return windows.SetNamedSecurityInfo(tmpName, windows.SE_FILE_OBJECT, sections, owner, group, dacl, nil)
+		err = windows.SetNamedSecurityInfo(tmpName, windows.SE_FILE_OBJECT, sections, owner, group, dacl, nil)
+		if errors.Is(err, windows.ERROR_INVALID_OWNER) || errors.Is(err, windows.ERROR_INVALID_PRIMARY_GROUP) {
+			// The original owner (or group) cannot be assigned by this process
+			// — e.g. a Windows update reset hosts ownership to TrustedInstaller
+			// and the service token lacks SeRestorePrivilege/SeTakeOwnership.
+			// The owner is cosmetic here: the mechanism exists for the DACL
+			// (Users read for the DNS Client). Degrade to DACL-only instead of
+			// skipping the round; after the rename the file owns SYSTEM and
+			// subsequent rounds take the full path again (self-healing).
+			slog.Info("cfhost: hosts owner carry unavailable, applying DACL only", "error", err.Error())
+			return windows.SetNamedSecurityInfo(tmpName, windows.SE_FILE_OBJECT,
+				windows.DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+		}
+		return err
 	}
 	// No original to inherit from: apply the standard hosts DACL explicitly.
 	sd, err := windows.SecurityDescriptorFromString(
