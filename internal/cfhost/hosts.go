@@ -11,18 +11,19 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"time"
 )
 
 // Hosts block management: only the marked block (# BEGIN cfhost .. # END
 // cfhost) is owned by the daemon; everything outside is preserved byte for
-// byte. Updates are atomic (full temp file + rename; the temp file prefers
-// the system TEMP directory to dodge the antivirus gate on the etc
-// directory), keep the original file mode and — on Windows, where a
-// same-volume rename carries the source ACL — the original security
-// descriptor is applied to the temp file before the rename so the DNS
-// Client service keeps its read access. Unchanged block content never
-// triggers a write.
+// byte. Updates write the hosts file in place — the file object is never
+// replaced, so its owner and ACL stay whatever Windows put there and a
+// system update resetting hosts ownership (e.g. to TrustedInstaller) cannot
+// freeze the daemon. Before each in-place write the exact pre-write bytes
+// are snapshotted next to the config file (hosts.snapshot, with one older
+// generation kept as hosts.snapshot.1): if a crash or power loss ever
+// truncates hosts mid-write, the snapshot holds the last complete pre-write
+// state — recovery is manual (copy the snapshot over hosts). Unchanged
+// block content never triggers a write.
 
 const (
 	hostsBegin = "# BEGIN cfhost"
@@ -34,26 +35,39 @@ const (
 // daemon, which retries next cycle.
 var errHostsSkipped = errors.New("cfhost: hosts read or write failed, update skipped")
 
-// Injection seams (see the newProbeTLSConfig precedent): tests override the
-// temp directory, the same-volume decision, the ACL carry, the rename action
-// and the lock-error classification to simulate Windows antivirus races
-// without a real scanner.
-var (
-	hostsTempDir      = os.TempDir
-	hostsSameVolume   = sameVolumeDefault
-	hostsPreserveACL  = hostsPreserveACLDefault
-	hostsRename       = os.Rename
-	isRenameLockError = isRenameLockErrorDefault
-)
+// hostsSnapshotPath places the pre-write hosts snapshot in the state
+// directory (the config file's folder), keeping every runtime file together.
+func hostsSnapshotPath(statePath string) string {
+	return filepath.Join(filepath.Dir(statePath), "hosts.snapshot")
+}
 
-// renameRetryDelay is the backoff between rename retries; a variable so
-// tests can shrink it.
-var renameRetryDelay = 200 * time.Millisecond
-
-// renameRetryMax bounds the rename retries after the first failure: five
-// retries at 200ms absorb the usual antivirus scan window (a few hundred
-// milliseconds) before the round is given up as skipped.
-const renameRetryMax = 5
+// snapshotHosts preserves the exact pre-write bytes before an in-place
+// hosts write. The snapshot is published atomically (write tmp, rename) and
+// one previous generation is kept (hosts.snapshot.1): after a
+// crash-truncated hosts the *next* round would otherwise snapshot the
+// already-damaged bytes, so the older generation is the recovery point.
+// Empty input (no hosts file yet) skips the snapshot — there is nothing to
+// lose. A failure here must skip the round: no backup, no write.
+func snapshotHosts(snapshotPath string, data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	// Rolling the previous generation is best-effort: the fresh snapshot
+	// published below is what gates the write.
+	if err := os.Rename(snapshotPath, snapshotPath+".1"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		slog.Warn("cfhost: hosts snapshot rotation failed", "error", err.Error())
+	}
+	tmp := snapshotPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, snapshotPath); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
 
 // renderBlock builds the managed block: one line per domain for IPv4, then
 // one line per domain for IPv6 when available.
@@ -125,10 +139,10 @@ func spliceBlock(data, block []byte) ([]byte, bool) {
 
 // updateHosts rewrites the managed block if (and only if) the rendered
 // content differs from the current file. Returns whether the file was
-// written. Every transient read or write failure — including rename
-// retries exhausted under an antivirus lock — returns errHostsSkipped so
+// written. Every transient failure — read, snapshot, or the in-place write
+// (e.g. an antivirus briefly holding hosts) — returns errHostsSkipped so
 // the caller treats the round as skipped and the daemon stays alive.
-func updateHosts(path string, domains []string, v4, v6 netip.Addr, hasV6 bool) (bool, error) {
+func updateHosts(path, snapshotPath string, domains []string, v4, v6 netip.Addr, hasV6 bool) (bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		// Transient read failure (e.g. antivirus briefly locking hosts on
@@ -140,96 +154,22 @@ func updateHosts(path string, domains []string, v4, v6 netip.Addr, hasV6 bool) (
 	if !changed {
 		return false, nil
 	}
+	// The pre-write snapshot gates the in-place write: without a backup on
+	// disk, a crash mid-write could lose the user's own hosts entries with
+	// no recovery point.
+	if err := snapshotHosts(snapshotPath, data); err != nil {
+		slog.Warn("cfhost: hosts snapshot failed, skipping hosts update this round", "error", err.Error())
+		return false, errHostsSkipped
+	}
 	mode := fs.FileMode(0o644)
 	if st, err := os.Stat(path); err == nil {
 		mode = st.Mode().Perm()
 	}
-	tmpName := writeHostsTemp(filepath.Dir(path), content, mode)
-	if tmpName == "" {
-		return false, errHostsSkipped
-	}
-	// The ACL carry must precede the rename: a same-volume rename keeps the
-	// temp file's inherited ACL (Windows), which would lock out the DNS
-	// Client service. A failure skips the round — the old file stays intact.
-	if err := hostsPreserveACL(tmpName, path); err != nil {
-		os.Remove(tmpName)
-		slog.Warn("cfhost: hosts acl apply failed, skipping hosts update this round", "error", err.Error())
-		return false, errHostsSkipped
-	}
-	if err := renameHostsWithRetry(tmpName, path); err != nil {
-		os.Remove(tmpName)
+	if err := os.WriteFile(path, content, mode); err != nil {
+		slog.Warn("cfhost: hosts write failed, skipping hosts update this round", "error", err.Error())
 		return false, errHostsSkipped
 	}
 	return true, nil
-}
-
-// writeHostsTemp stages content in a closed temp file and returns its path,
-// or "" when staging failed (already logged): the round is skipped. The
-// temp file prefers the system TEMP directory — creating files inside
-// System32\drivers\etc is far more likely to draw an antivirus scan than
-// TEMP — and falls back to the hosts directory when TEMP sits on another
-// volume (rename across volumes degrades to copy+delete and loses
-// atomicity) or cannot be used. Both locations keep the write-then-rename
-// replacement atomic and preserve the original file mode.
-func writeHostsTemp(dir string, content []byte, mode fs.FileMode) string {
-	tmpDir := dir
-	if t := hostsTempDir(); t != "" && hostsSameVolume(t, dir) {
-		tmpDir = t
-	}
-	tmp, err := os.CreateTemp(tmpDir, ".cfhost-hosts-*")
-	if err != nil && tmpDir != dir {
-		// Unusable TEMP (missing directory, access denied, ...): fall back
-		// to the hosts directory and keep the rename atomic.
-		tmpDir = dir
-		tmp, err = os.CreateTemp(tmpDir, ".cfhost-hosts-*")
-	}
-	if err != nil {
-		slog.Warn("cfhost: hosts temp file creation failed, skipping hosts update this round",
-			"temp_dir", tmpDir, "error", err.Error())
-		return ""
-	}
-	name := tmp.Name()
-	if _, err := tmp.Write(content); err != nil {
-		tmp.Close()
-		os.Remove(name)
-		slog.Warn("cfhost: hosts temp write failed, skipping hosts update this round", "error", err.Error())
-		return ""
-	}
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		os.Remove(name)
-		slog.Warn("cfhost: hosts temp chmod failed, skipping hosts update this round", "error", err.Error())
-		return ""
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(name)
-		slog.Warn("cfhost: hosts temp close failed, skipping hosts update this round", "error", err.Error())
-		return ""
-	}
-	return name
-}
-
-// renameHostsWithRetry replaces the hosts file with the staged temp file.
-// Rename failures that look like a transient antivirus handle (access
-// denied / sharing violation, Windows) are retried with backoff — the scan
-// usually releases the file within a few hundred milliseconds. After
-// renameRetryMax retries the error is returned and the caller skips this
-// round; non-retryable failures return immediately.
-func renameHostsWithRetry(tmpName, path string) error {
-	for retry := 0; ; retry++ {
-		err := hostsRename(tmpName, path)
-		if err == nil {
-			return nil
-		}
-		if !isRenameLockError(err) || retry >= renameRetryMax {
-			slog.Warn("cfhost: hosts rename failed, skipping hosts update this round",
-				"retries", retry, "error", err.Error())
-			return err
-		}
-		slog.Warn("cfhost: hosts rename blocked (likely antivirus scan), retrying",
-			"retry", retry+1, "of", renameRetryMax, "error", err.Error())
-		time.Sleep(renameRetryDelay)
-	}
 }
 
 // flushDNS refreshes the system DNS cache after a hosts update. Windows runs

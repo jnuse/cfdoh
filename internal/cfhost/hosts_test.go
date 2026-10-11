@@ -17,30 +17,6 @@ var (
 	v6 = netip.MustParseAddr("2606:4700::1111")
 )
 
-// errFakeLock stands in for a Windows access-denied / sharing-violation
-// rename failure caused by an antivirus scan handle.
-var errFakeLock = errors.New("fake antivirus lock")
-
-// withHostsSeams overrides the hosts write seams (temp dir, same-volume
-// decision, rename action, lock classification, retry delay) for one test
-// and restores them on cleanup. Tests using it must not run in parallel.
-func withHostsSeams(t *testing.T,
-	tempDir func() string,
-	sameVolume func(a, b string) bool,
-	rename func(oldpath, newpath string) error,
-	lockError func(error) bool,
-	delay time.Duration) {
-	t.Helper()
-	oldTemp, oldVol, oldRename, oldLock, oldDelay :=
-		hostsTempDir, hostsSameVolume, hostsRename, isRenameLockError, renameRetryDelay
-	hostsTempDir, hostsSameVolume, hostsRename, isRenameLockError, renameRetryDelay =
-		tempDir, sameVolume, rename, lockError, delay
-	t.Cleanup(func() {
-		hostsTempDir, hostsSameVolume, hostsRename, isRenameLockError, renameRetryDelay =
-			oldTemp, oldVol, oldRename, oldLock, oldDelay
-	})
-}
-
 // hostsFileWithBlock seeds a hosts file holding an outdated managed block.
 func hostsFileWithBlock(t *testing.T, dir string) string {
 	t.Helper()
@@ -52,18 +28,11 @@ func hostsFileWithBlock(t *testing.T, dir string) string {
 	return path
 }
 
-// noStagingLeftover asserts no .cfhost-hosts-* temp file remains in dir.
-func noStagingLeftover(t *testing.T, dir, what string) {
+// snapshotPath returns the snapshot path for a hosts file in dir and asserts
+// no snapshot tmp leftovers remain.
+func snapshotPath(t *testing.T, dir string) string {
 	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".cfhost-hosts-") {
-			t.Fatalf("%s: staging leftover %s", what, e.Name())
-		}
-	}
+	return filepath.Join(dir, "hosts.snapshot")
 }
 
 func TestSpliceBlockPreservesOutsideBytes(t *testing.T) {
@@ -133,7 +102,7 @@ func TestUpdateHostsRoundTripAndMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	written, err := updateHosts(path, td, v4, v6, true)
+	written, err := updateHosts(path, snapshotPath(t, dir), td, v4, v6, true)
 	if err != nil || !written {
 		t.Fatalf("first update: written=%v err=%v", written, err)
 	}
@@ -156,7 +125,7 @@ func TestUpdateHostsRoundTripAndMode(t *testing.T) {
 	// Second identical update must not rewrite.
 	before, _ := os.Stat(path)
 	time.Sleep(10 * time.Millisecond)
-	written, err = updateHosts(path, td, v4, v6, true)
+	written, err = updateHosts(path, snapshotPath(t, dir), td, v4, v6, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +138,7 @@ func TestUpdateHostsRoundTripAndMode(t *testing.T) {
 	}
 
 	// Address change rewrites and rebuilds the block.
-	written, err = updateHosts(path, td, netip.MustParseAddr("5.6.7.8"), netip.Addr{}, false)
+	written, err = updateHosts(path, snapshotPath(t, dir), td, netip.MustParseAddr("5.6.7.8"), netip.Addr{}, false)
 	if err != nil || !written {
 		t.Fatalf("changed update: written=%v err=%v", written, err)
 	}
@@ -183,14 +152,19 @@ func TestUpdateHostsRoundTripAndMode(t *testing.T) {
 }
 
 func TestUpdateHostsMissingFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "hosts")
-	written, err := updateHosts(path, td, v4, netip.Addr{}, false)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hosts")
+	written, err := updateHosts(path, snapshotPath(t, dir), td, v4, netip.Addr{}, false)
 	if err != nil || !written {
 		t.Fatalf("missing hosts file should be created: written=%v err=%v", written, err)
 	}
 	data, _ := os.ReadFile(path)
 	if !bytes.Equal(data, renderBlock(td, v4, netip.Addr{}, false)) {
 		t.Fatalf("created file wrong:\n%q", data)
+	}
+	// An empty pre-write state has nothing to lose: no snapshot may appear.
+	if _, err := os.Stat(filepath.Join(dir, "hosts.snapshot")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("empty pre-write state must not snapshot, stat err=%v", err)
 	}
 }
 
@@ -203,7 +177,7 @@ func TestUpdateHostsTransientReadErrorSkips(t *testing.T) {
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	written, err := updateHosts(path, td, v4, netip.Addr{}, false)
+	written, err := updateHosts(path, snapshotPath(t, dir), td, v4, netip.Addr{}, false)
 	if !errors.Is(err, errHostsSkipped) {
 		t.Fatalf("expected skip signal, got %v", err)
 	}
@@ -212,266 +186,81 @@ func TestUpdateHostsTransientReadErrorSkips(t *testing.T) {
 	}
 }
 
-func TestUpdateHostsTempPreferredWhenSameVolume(t *testing.T) {
-	// Same-volume TEMP (Windows layout): the temp file must be staged in
-	// TEMP, not in the antivirus-watched hosts directory, and renamed into
-	// place atomically.
+func TestUpdateHostsSnapshotKeepsPreWriteBytes(t *testing.T) {
+	// Every actual write snapshots the exact pre-write bytes first; the
+	// previous snapshot rolls into hosts.snapshot.1, so a crash-truncated
+	// hosts still leaves a complete recovery generation behind.
 	dir := t.TempDir()
-	tempDir := t.TempDir()
 	path := hostsFileWithBlock(t, dir)
+	first, _ := os.ReadFile(path)
 
-	var renamedFrom string
-	withHostsSeams(t,
-		func() string { return tempDir },
-		func(a, b string) bool { return true },
-		func(oldpath, newpath string) error {
-			renamedFrom = oldpath
-			return os.Rename(oldpath, newpath)
-		},
-		func(err error) bool { return false },
-		0)
+	if _, err := updateHosts(path, snapshotPath(t, dir), td, v4, netip.Addr{}, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "hosts.snapshot"))
+	if err != nil {
+		t.Fatalf("snapshot missing after write: %v", err)
+	}
+	if !bytes.Equal(got, first) {
+		t.Fatalf("snapshot must hold exact pre-write bytes:\n%q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "hosts.snapshot.tmp")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("snapshot tmp leftover: %v", err)
+	}
 
-	written, err := updateHosts(path, td, v4, netip.Addr{}, false)
-	if err != nil || !written {
-		t.Fatalf("update: written=%v err=%v", written, err)
+	second, _ := os.ReadFile(path)
+	if _, err := updateHosts(path, snapshotPath(t, dir), td, netip.MustParseAddr("5.6.7.8"), netip.Addr{}, false); err != nil {
+		t.Fatal(err)
 	}
-	if filepath.Dir(renamedFrom) != tempDir {
-		t.Fatalf("temp file must be staged in TEMP %s, got %s", tempDir, renamedFrom)
+	got, err = os.ReadFile(filepath.Join(dir, "hosts.snapshot"))
+	if err != nil || !bytes.Equal(got, second) {
+		t.Fatalf("second snapshot wrong (err=%v):\n%q", err, got)
 	}
-	noStagingLeftover(t, tempDir, "TEMP after rename")
-	data, _ := os.ReadFile(path)
-	if !bytes.Contains(data, renderBlock(td, v4, netip.Addr{}, false)) {
-		t.Fatalf("hosts block not updated:\n%q", data)
-	}
-}
-
-func TestUpdateHostsTempCrossVolumeFallsBackToHostsDir(t *testing.T) {
-	// Cross-volume TEMP (rename would degrade to copy+delete): staging must
-	// fall back to the hosts directory to keep the rename atomic.
-	dir := t.TempDir()
-	tempDir := t.TempDir()
-	path := hostsFileWithBlock(t, dir)
-
-	var renamedFrom string
-	withHostsSeams(t,
-		func() string { return tempDir },
-		func(a, b string) bool { return false }, // simulated cross-volume TEMP
-		func(oldpath, newpath string) error {
-			renamedFrom = oldpath
-			return os.Rename(oldpath, newpath)
-		},
-		func(err error) bool { return false },
-		0)
-
-	written, err := updateHosts(path, td, v4, netip.Addr{}, false)
-	if err != nil || !written {
-		t.Fatalf("update: written=%v err=%v", written, err)
-	}
-	if filepath.Dir(renamedFrom) != dir {
-		t.Fatalf("cross-volume TEMP must stage next to hosts (%s), got %s", dir, renamedFrom)
-	}
-	entries, _ := os.ReadDir(tempDir)
-	if len(entries) != 0 {
-		t.Fatalf("nothing may be created in a cross-volume TEMP: %v", entries)
+	got, err = os.ReadFile(filepath.Join(dir, "hosts.snapshot.1"))
+	if err != nil || !bytes.Equal(got, first) {
+		t.Fatalf("rotated generation must hold the first pre-write state (err=%v):\n%q", err, got)
 	}
 }
 
-func TestUpdateHostsTempUnusableFallsBackToHostsDir(t *testing.T) {
-	// Same-volume but unusable TEMP (missing directory): staging retries in
-	// the hosts directory instead of failing the round.
-	dir := t.TempDir()
-	tempDir := filepath.Join(dir, "no-such-temp")
-	path := hostsFileWithBlock(t, dir)
-
-	var renamedFrom string
-	withHostsSeams(t,
-		func() string { return tempDir },
-		func(a, b string) bool { return true },
-		func(oldpath, newpath string) error {
-			renamedFrom = oldpath
-			return os.Rename(oldpath, newpath)
-		},
-		func(err error) bool { return false },
-		0)
-
-	written, err := updateHosts(path, td, v4, netip.Addr{}, false)
-	if err != nil || !written {
-		t.Fatalf("update: written=%v err=%v", written, err)
-	}
-	if filepath.Dir(renamedFrom) != dir {
-		t.Fatalf("unusable TEMP must stage next to hosts (%s), got %s", dir, renamedFrom)
-	}
-}
-
-func TestUpdateHostsACLCarryOrderAndFailureSkips(t *testing.T) {
-	// The ACL carry runs after staging, before the rename, with the staged
-	// file and the original hosts as arguments; a carry failure skips the
-	// round (old file intact, temp cleaned) without attempting the rename.
-	for _, tc := range []struct {
-		name      string
-		carryErr  error
-		wantWrite bool
-	}{{"carry ok", nil, true}, {"carry fails", errFakeLock, false}} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			path := hostsFileWithBlock(t, dir)
-			orig, _ := os.ReadFile(path)
-
-			var events []string
-			withHostsSeams(t,
-				func() string { return "" },
-				func(a, b string) bool { return false },
-				func(oldpath, newpath string) error {
-					events = append(events, "rename")
-					return os.Rename(oldpath, newpath)
-				},
-				func(err error) bool { return false },
-				0)
-			oldCarry := hostsPreserveACL
-			hostsPreserveACL = func(tmpName, origPath string) error {
-				if origPath != path {
-					t.Errorf("carry origPath = %q, want hosts path %q", origPath, path)
-				}
-				if _, err := os.Stat(tmpName); err != nil {
-					t.Errorf("carry must see the staged file: %v", err)
-				}
-				events = append(events, "acl")
-				return tc.carryErr
-			}
-			t.Cleanup(func() { hostsPreserveACL = oldCarry })
-
-			written, err := updateHosts(path, td, v4, netip.Addr{}, false)
-			if tc.wantWrite {
-				if err != nil || !written {
-					t.Fatalf("update: written=%v err=%v", written, err)
-				}
-				if len(events) != 2 || events[0] != "acl" || events[1] != "rename" {
-					t.Fatalf("carry must precede rename, events=%v", events)
-				}
-				return
-			}
-			if !errors.Is(err, errHostsSkipped) {
-				t.Fatalf("carry failure must skip, got %v", err)
-			}
-			if written || len(events) != 1 || events[0] != "acl" {
-				t.Fatalf("carry failure must not rename, events=%v written=%v", events, written)
-			}
-			got, _ := os.ReadFile(path)
-			if !bytes.Equal(got, orig) {
-				t.Fatalf("hosts must stay untouched after carry failure:\n%q", got)
-			}
-			noStagingLeftover(t, dir, "hosts dir after carry failure")
-		})
-	}
-}
-
-func TestUpdateHostsRenameRetriesThenSucceeds(t *testing.T) {
-	// A rename failure sequence classified as an antivirus lock is retried
-	// with backoff and succeeds once the scan releases the file.
+func TestUpdateHostsSnapshotFailureSkipsWrite(t *testing.T) {
+	// No backup, no write: when the snapshot cannot be persisted (here: its
+	// directory does not exist), the round is skipped and hosts stays
+	// byte-for-byte intact.
 	dir := t.TempDir()
 	path := hostsFileWithBlock(t, dir)
 	orig, _ := os.ReadFile(path)
 
-	failures := 3
-	calls := 0
-	withHostsSeams(t,
-		func() string { return "" },
-		func(a, b string) bool { return false },
-		func(oldpath, newpath string) error {
-			calls++
-			if failures > 0 {
-				failures--
-				return errFakeLock
-			}
-			return os.Rename(oldpath, newpath)
-		},
-		func(err error) bool { return errors.Is(err, errFakeLock) },
-		0)
-
-	written, err := updateHosts(path, td, v4, netip.Addr{}, false)
-	if err != nil || !written {
-		t.Fatalf("update after retries: written=%v err=%v", written, err)
-	}
-	if calls != 1+3 {
-		t.Fatalf("rename calls = %d, want 1 initial + 3 retries = 4", calls)
-	}
-	data, _ := os.ReadFile(path)
-	if bytes.Equal(data, orig) || !bytes.Contains(data, renderBlock(td, v4, netip.Addr{}, false)) {
-		t.Fatalf("hosts must hold the new block after retries:\n%q", data)
-	}
-	noStagingLeftover(t, dir, "hosts dir after retried rename")
-}
-
-func TestUpdateHostsRenameExhaustedSkips(t *testing.T) {
-	// Retry budget exhausted: the round is skipped (errHostsSkipped), hosts
-	// stays byte-for-byte identical and the staged temp file is cleaned up.
-	dir := t.TempDir()
-	path := hostsFileWithBlock(t, dir)
-	orig, _ := os.ReadFile(path)
-
-	calls := 0
-	withHostsSeams(t,
-		func() string { return "" },
-		func(a, b string) bool { return false },
-		func(oldpath, newpath string) error {
-			calls++
-			return errFakeLock
-		},
-		func(err error) bool { return errors.Is(err, errFakeLock) },
-		0)
-
-	written, err := updateHosts(path, td, v4, netip.Addr{}, false)
+	written, err := updateHosts(path, filepath.Join(dir, "no-such-dir", "hosts.snapshot"), td, v4, netip.Addr{}, false)
 	if !errors.Is(err, errHostsSkipped) {
-		t.Fatalf("exhausted retries must skip, got %v", err)
+		t.Fatalf("snapshot failure must skip, got %v", err)
 	}
 	if written {
 		t.Fatal("skip must not report a write")
 	}
-	if calls != 1+renameRetryMax {
-		t.Fatalf("rename calls = %d, want 1 initial + %d retries", calls, renameRetryMax)
-	}
 	got, _ := os.ReadFile(path)
 	if !bytes.Equal(got, orig) {
-		t.Fatalf("hosts must stay untouched after exhausted retries:\n%q", got)
+		t.Fatalf("hosts must stay untouched after snapshot failure:\n%q", got)
 	}
-	noStagingLeftover(t, dir, "hosts dir after exhausted retries")
 }
 
-func TestUpdateHostsRenameNonLockErrorSkipsWithoutRetry(t *testing.T) {
-	// A rename failure that is not an antivirus-style lock returns
-	// immediately: no retries, the round is skipped and the staged temp
-	// file is cleaned up. The hour-long retry delay guarantees the test
-	// budget blows up on any accidental retry.
+func TestUpdateHostsUnchangedLeavesSnapshotAlone(t *testing.T) {
 	dir := t.TempDir()
 	path := hostsFileWithBlock(t, dir)
-	orig, _ := os.ReadFile(path)
+	if _, err := updateHosts(path, snapshotPath(t, dir), td, v4, netip.Addr{}, false); err != nil {
+		t.Fatal(err)
+	}
+	snap := filepath.Join(dir, "hosts.snapshot")
+	before, _ := os.Stat(snap)
+	time.Sleep(10 * time.Millisecond)
 
-	calls := 0
-	withHostsSeams(t,
-		func() string { return "" },
-		func(a, b string) bool { return false },
-		func(oldpath, newpath string) error {
-			calls++
-			return errors.New("not a lock")
-		},
-		func(err error) bool { return false },
-		time.Hour)
-
-	written, err := updateHosts(path, td, v4, netip.Addr{}, false)
-	if !errors.Is(err, errHostsSkipped) {
-		t.Fatalf("non-lock rename failure must skip, got %v", err)
+	// Same target address: unchanged short-circuits before the snapshot.
+	if written, err := updateHosts(path, snapshotPath(t, dir), td, v4, netip.Addr{}, false); err != nil || written {
+		t.Fatalf("unchanged update: written=%v err=%v", written, err)
 	}
-	if written {
-		t.Fatal("skip must not report a write")
+	after, _ := os.Stat(snap)
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Fatal("unchanged update must not touch the snapshot")
 	}
-	if calls != 1 {
-		t.Fatalf("non-lock rename failure must not retry, calls = %d", calls)
-	}
-	got, _ := os.ReadFile(path)
-	if !bytes.Equal(got, orig) {
-		t.Fatalf("hosts must stay untouched after non-lock failure:\n%q", got)
-	}
-	noStagingLeftover(t, dir, "hosts dir after non-lock rename failure")
 }
 
 func TestRenderBlockOrder(t *testing.T) {

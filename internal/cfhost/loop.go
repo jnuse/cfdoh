@@ -114,7 +114,8 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 	// --- v6 hysteresis (no fail-streak; v6 loss keeps the old entry) ---
 	newV6, hasV6 := decideV6(st.CurrentV6, byAddr, v6top, cfg.Hysteresis)
 
-	written, err := updateHosts(cfg.HostsPath, cfg.ManagedDomains, newV4, newV6, hasV6)
+	written, err := updateHosts(cfg.HostsPath, hostsSnapshotPath(cfg.StatePath),
+		cfg.ManagedDomains, newV4, newV6, hasV6)
 	if err != nil {
 		// Transient hosts read/write failure (errHostsSkipped): nothing was
 		// written, the current addresses and the fail streak stay as-is, and

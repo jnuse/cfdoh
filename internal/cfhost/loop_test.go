@@ -3,13 +3,11 @@ package cfhost
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -147,35 +145,25 @@ func withFakeProbes(t *testing.T, outcomes ...probeOutcome) {
 }
 
 func TestRunOnceHostsWriteFailureSkipsRound(t *testing.T) {
-	// Persistent hosts write failure (rename retries exhausted): RunOnce
-	// returns nil, hosts stays untouched, the current address and fail
-	// streak survive unchanged and the state (next run, candidates) is
-	// saved — the daemon retries next cycle.
+	// Persistent hosts write failure (the hosts parent directory is
+	// missing, so the in-place write cannot succeed): RunOnce returns nil,
+	// no hosts file appears, the current address and fail streak survive
+	// unchanged and the state (next run, candidates) is saved — the daemon
+	// retries next cycle.
 	dir := t.TempDir()
-	hostsPath := hostsFileWithBlock(t, dir)
-	orig, _ := os.ReadFile(hostsPath)
-	orig = append([]byte("user mapping\r\n"), orig...)
-	if err := os.WriteFile(hostsPath, orig, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	hostsPath := filepath.Join(dir, "no-such-dir", "hosts")
 	statePath := filepath.Join(dir, "state.json")
 	if err := saveState(statePath, clientState{CurrentV4: "9.9.9.9"}); err != nil {
 		t.Fatal(err)
 	}
 
 	// Current 9.9.9.9 alive at 100ms, candidate 1.1.1.1 at 10ms: a >20%
-	// gain forces a switch, so a write is attempted (and injected to fail).
+	// gain forces a switch, so a write is attempted (and fails for real).
 	cur := netip.MustParseAddr("9.9.9.9")
 	cand := netip.MustParseAddr("1.1.1.1")
 	withFakeProbes(t,
 		probeOutcome{addr: cand, median: 10 * time.Millisecond, ok: true},
 		probeOutcome{addr: cur, median: 100 * time.Millisecond, ok: true})
-	withHostsSeams(t,
-		func() string { return "" },
-		func(a, b string) bool { return false },
-		func(oldpath, newpath string) error { return errFakeLock },
-		func(err error) bool { return errors.Is(err, errFakeLock) },
-		0)
 
 	cfg := testConfig(t, hostsPath, statePath, "list:1.1.1.1")
 	if err := RunOnce(context.Background(), cfg); err != nil {
@@ -183,8 +171,8 @@ func TestRunOnceHostsWriteFailureSkipsRound(t *testing.T) {
 	}
 
 	got, _ := os.ReadFile(hostsPath)
-	if !bytes.Equal(got, orig) {
-		t.Fatalf("hosts must stay untouched on write failure:\n%q", got)
+	if len(got) != 0 {
+		t.Fatalf("no hosts file may appear on write failure, got %q", got)
 	}
 	st, found := loadState(statePath)
 	if !found {
@@ -205,25 +193,19 @@ func TestRunOnceHostsWriteFailureSkipsRound(t *testing.T) {
 }
 
 func TestRunLoopSurvivesHostsWriteFailure(t *testing.T) {
-	// The daemon loop must not exit while every hosts write fails: passes
-	// keep running (each burning the full rename retry budget) until the
-	// context is cancelled, and cancellation still returns nil.
+	// The daemon loop must not exit while every hosts update is skipped:
+	// hosts is a directory, so each pass fails at the read stage, keeps
+	// scheduling (the state file is rewritten every pass — its mtime counts
+	// the passes), and cancellation still returns nil.
 	dir := t.TempDir()
-	hostsPath := hostsFileWithBlock(t, dir)
+	hostsPath := filepath.Join(dir, "hosts-as-dir")
+	if err := os.Mkdir(hostsPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	statePath := filepath.Join(dir, "state.json")
 
-	var calls atomic.Int64
 	withFakeProbes(t,
 		probeOutcome{addr: netip.MustParseAddr("1.1.1.1"), median: 10 * time.Millisecond, ok: true})
-	withHostsSeams(t,
-		func() string { return "" },
-		func(a, b string) bool { return false },
-		func(oldpath, newpath string) error {
-			calls.Add(1)
-			return errFakeLock
-		},
-		func(err error) bool { return errors.Is(err, errFakeLock) },
-		0)
 
 	cfg := testConfig(t, hostsPath, statePath, "list:1.1.1.1")
 	cfg.Interval = 20 * time.Millisecond
@@ -232,12 +214,21 @@ func TestRunLoopSurvivesHostsWriteFailure(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- RunLoop(ctx, cfg) }()
 
-	// Two full passes = 2*(1 initial + renameRetryMax retries) calls. A
-	// RunLoop that died on the first write failure would stall here.
-	wantCalls := int64(2 * (1 + renameRetryMax))
+	// Three passes with distinct state-file mtimes prove the loop survived
+	// two skipped hosts updates and kept scheduling.
+	passes := 0
+	var last time.Time
 	deadline := time.Now().Add(10 * time.Second)
-	for calls.Load() < wantCalls && time.Now().Before(deadline) {
+	for passes < 3 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
+		st, err := os.Stat(statePath)
+		if err != nil {
+			continue
+		}
+		if !st.ModTime().Equal(last) {
+			last = st.ModTime()
+			passes++
+		}
 	}
 	cancel()
 	select {
@@ -248,8 +239,8 @@ func TestRunLoopSurvivesHostsWriteFailure(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("RunLoop did not return after cancel")
 	}
-	if calls.Load() < wantCalls {
-		t.Fatalf("expected >= %d rename calls (two full passes), got %d", wantCalls, calls.Load())
+	if passes < 3 {
+		t.Fatalf("expected >= 3 passes, saw %d", passes)
 	}
 }
 
@@ -366,12 +357,6 @@ func TestLoopReloadsConfigEachPass(t *testing.T) {
 
 	cand := netip.MustParseAddr("1.1.1.1")
 	withFakeProbes(t, probeOutcome{addr: cand, median: 10 * time.Millisecond, ok: true})
-	withHostsSeams(t,
-		func() string { return "" },
-		func(a, b string) bool { return false },
-		func(oldpath, newpath string) error { return os.Rename(oldpath, newpath) },
-		func(err error) bool { return false },
-		0)
 
 	// One pass under the initial config, then edit and pass again: the
 	// hosts block must carry the new domain without any restart.
@@ -423,12 +408,6 @@ func TestPassDoneLoggedEveryPass(t *testing.T) {
 	withFakeProbes(t,
 		probeOutcome{addr: cand, median: 10 * time.Millisecond, ok: true},
 		probeOutcome{addr: cur, median: 100 * time.Millisecond, ok: true})
-	withHostsSeams(t,
-		func() string { return "" },
-		func(a, b string) bool { return false },
-		func(oldpath, newpath string) error { return os.Rename(oldpath, newpath) },
-		func(err error) bool { return false },
-		0)
 
 	// Pass 1: switch to 1.1.1.1 (decision=updated).
 	if err := RunOnce(context.Background(), cfg); err != nil {
