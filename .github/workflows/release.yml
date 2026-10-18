@@ -34,6 +34,14 @@ jobs:
             goos: linux
             goarch: amd64
             ext: tar.gz
+          - component: cfpush
+            goos: windows
+            goarch: amd64
+            ext: zip
+          - component: cfpush
+            goos: linux
+            goarch: amd64
+            ext: tar.gz
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -48,7 +56,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           LDFLAGS="-s -w -X github.com/jnuse/cfdoh/internal/httpapi.Version=${VERSION}"
-          if [ "${{ matrix.component }}" = "cfhost" ]; then
+          if [ "${{ matrix.component }}" = "cfhost" ] || [ "${{ matrix.component }}" = "cfpush" ]; then
             LDFLAGS="-s -w -X main.version=${VERSION}"
           fi
           mkdir -p "dist/${{ matrix.component }}_${GITHUB_REF_NAME#v}_${{ matrix.goos }}_${{ matrix.goarch }}"
