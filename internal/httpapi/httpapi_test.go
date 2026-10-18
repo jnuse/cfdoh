@@ -757,13 +757,22 @@ func TestAdminPreferredValidation(t *testing.T) {
 	for _, body := range []string{
 		`{"ipv4":["1.2.3.999"],"scope":"default"}`,                                     // invalid address
 		`{"ipv4":["1.2.3.4"],"scope":"bogus"}`,                                         // unknown scope
-		`{"ipv4":["1.2.3.4"],"scope":"isp:national"}`,                                  // reserved name
 		`{"ipv4":["1.2.3.4"],"scope":"isp:UPPER"}`,                                     // invalid operator name
 		`{"ipv4":["` + strings.Repeat("1.1.1.1,", 64) + `1.1.1.1"],"scope":"default"}`, // 65 addresses
 	} {
 		if code := post("admin-tok", body); code != 400 {
 			t.Fatalf("POST %s = %d, want 400", body, code)
 		}
+	}
+
+	// isp:national is feed-composed: the hub token may not write it, but
+	// the admin token may (cfpush manual fallback).
+	loadRanges(t)
+	if code := post("hub-tok", `{"ipv4":["1.2.3.4"],"scope":"isp:national"}`); code != 400 {
+		t.Fatalf("hub token writing isp:national = %d, want 400", code)
+	}
+	if code := post("admin-tok", `{"ipv4":["104.16.1.10"],"scope":"isp:national"}`); code != 200 {
+		t.Fatalf("admin token writing isp:national = %d, want 200", code)
 	}
 
 	// ttl below the floor is clamped (200), not rejected

@@ -737,7 +737,7 @@ func (s *Server) handleAdminPreferred(w http.ResponseWriter, r *http.Request, is
 			http.Error(w, "hub token may only report isp pools", http.StatusForbidden)
 			return
 		}
-		s.applyPreferred(w, r, &req)
+		s.applyPreferred(w, r, &req, true)
 		return
 	}
 	switch r.Method {
@@ -762,7 +762,7 @@ func (s *Server) handleAdminPreferred(w http.ResponseWriter, r *http.Request, is
 			http.Error(w, "invalid json body", http.StatusBadRequest)
 			return
 		}
-		s.applyPreferred(w, r, &req)
+		s.applyPreferred(w, r, &req, false)
 	default:
 		w.Header().Set("Allow", "GET, POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -773,7 +773,7 @@ func (s *Server) handleAdminPreferred(w http.ResponseWriter, r *http.Request, is
 // pool layer. scope "client" is translated into the reporter's own ECS
 // identity; isp:* addresses must sit inside the published Cloudflare ranges
 // (any outsider rejects the whole batch).
-func (s *Server) applyPreferred(w http.ResponseWriter, r *http.Request, req *preferredPost) {
+func (s *Server) applyPreferred(w http.ResponseWriter, r *http.Request, req *preferredPost, isHub bool) {
 	var scope string
 	switch {
 	case req.Scope == "default":
@@ -785,7 +785,16 @@ func (s *Server) applyPreferred(w http.ResponseWriter, r *http.Request, req *pre
 			return
 		}
 		scope = v.Identity
-	case strings.HasPrefix(req.Scope, "isp:") && ispNameValid(strings.TrimPrefix(req.Scope, "isp:")):
+	case strings.HasPrefix(req.Scope, "isp:"):
+		name := strings.TrimPrefix(req.Scope, "isp:")
+		// The nationwide pool is feed-composed, not a per-probe report: the
+		// hub token stays limited to operator pools, while the admin token
+		// may also write isp:national — the cfpush manual fallback when the
+		// feed's nationwide pool goes dark.
+		if !ispNameValid(name) && !(name == "national" && !isHub) {
+			http.Error(w, "invalid scope", http.StatusBadRequest)
+			return
+		}
 		scope = req.Scope
 	default:
 		http.Error(w, "invalid scope", http.StatusBadRequest)
