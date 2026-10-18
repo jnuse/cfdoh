@@ -257,12 +257,19 @@ func TestIspSourcesDefaultsAndModes(t *testing.T) {
 	// wins and leaves sources empty.
 	t.Run("default sources", func(t *testing.T) {
 		cfg := loadTestConfig(t, nil)
-		if cfg.IspTableURL != "" || len(cfg.IspSources) != 4 {
-			t.Fatalf("want 4 built-in sources, got table=%q sources=%d", cfg.IspTableURL, len(cfg.IspSources))
+		if cfg.IspTableURL != "" || len(cfg.IspSources) != 8 {
+			t.Fatalf("want 8 built-in sources (4 operators x v4+v6), got table=%q sources=%d", cfg.IspTableURL, len(cfg.IspSources))
 		}
+		files := make(map[string]int) // operator → file count (v4 + v6)
 		for _, s := range cfg.IspSources {
 			if !strings.HasPrefix(s.URL, "https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/") {
 				t.Fatalf("unexpected built-in URL %q", s.URL)
+			}
+			files[s.Name]++
+		}
+		for _, op := range []string{"chinanet", "unicom", "cmcc", "cernet"} {
+			if files[op] != 2 { // v4 file + v6 file
+					t.Fatalf("operator %s must have a v4 and a v6 file, got %d", op, files[op])
 			}
 		}
 	})

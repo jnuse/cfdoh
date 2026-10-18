@@ -73,13 +73,21 @@ type Config struct {
 var defaultUpstreams = "https://cloudflare-dns.com/dns-query,https://dns.google/dns-query,https://dns.quad9.net/dns-query"
 
 // defaultIspSources is the built-in operator CIDR source set: the
-// ip-lists branch of gaoyifan/china-operator-ip, one file per operator,
-// regenerated daily by upstream Actions. Each entry names the scope the
-// file's CIDR lines belong to ("<name> <cidr>" rows after fetch).
+// ip-lists branch of gaoyifan/china-operator-ip, one file per operator
+// and family, regenerated daily by upstream Actions. The v4 and v6
+// listings live in separate files (<op>.txt and <op>6.txt) — both are
+// required or IPv6 clients never match an operator and fall back to the
+// nationwide pool. Each entry names the scope the file's CIDR lines
+// belong to ("<name> <cidr>" rows after fetch); same-name v4/v6 files
+// merge into one operator in the parsed table.
 const defaultIspSources = "chinanet=https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/chinanet.txt," +
+	"chinanet=https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/chinanet6.txt," +
 	"unicom=https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/unicom.txt," +
+	"unicom=https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/unicom6.txt," +
 	"cmcc=https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/cmcc.txt," +
-	"cernet=https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/cernet.txt"
+	"cmcc=https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/cmcc6.txt," +
+	"cernet=https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/cernet.txt," +
+	"cernet=https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/cernet6.txt"
 
 // IspSource is one operator CIDR source: every non-comment line of the
 // fetched document is a bare CIDR attributed to Name.
