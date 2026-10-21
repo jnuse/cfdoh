@@ -29,6 +29,7 @@ type Config struct {
 	// Auxiliary exported fields (allowed additions).
 	StatePath      string
 	CandidateLimit int
+	HostsIPs       int
 	HTTPVerify     bool
 }
 
@@ -41,10 +42,13 @@ const (
 	defaultFailoverRounds = 3
 	defaultInterval       = 60 * time.Minute
 	defaultCandidateLimit = 256
+	defaultHostsIPs       = 3
 	defaultHTTPVerify     = true
 
 	minConcurrency = 1
 	maxConcurrency = 64
+	minHostsIPs    = 1
+	maxHostsIPs    = 8
 	minTimeoutMs   = 250
 	maxTimeoutMs   = 10000
 	minRounds      = 1
@@ -72,6 +76,7 @@ type fileConfig struct {
 	HostsPath      string   `json:"hosts_path"`
 	StatePath      string   `json:"state_path"`
 	CandidateLimit int      `json:"candidate_limit"`
+	HostsIPs       int      `json:"hosts_ips"`
 	HTTPVerify     *bool    `json:"http_verify"`
 }
 
@@ -108,6 +113,9 @@ func (fc *fileConfig) applyTo(cfg *Config) {
 	}
 	if fc.CandidateLimit != 0 {
 		cfg.CandidateLimit = fc.CandidateLimit
+	}
+	if fc.HostsIPs != 0 {
+		cfg.HostsIPs = fc.HostsIPs
 	}
 	if fc.HTTPVerify != nil {
 		cfg.HTTPVerify = *fc.HTTPVerify
@@ -153,6 +161,7 @@ func LoadConfig() (*Config, error) {
 		HostsPath:      defaultHostsPath(),
 		StatePath:      defaultStatePath(path),
 		CandidateLimit: defaultCandidateLimit,
+		HostsIPs:       defaultHostsIPs,
 		HTTPVerify:     defaultHTTPVerify,
 	}
 	if data, err := os.ReadFile(path); err == nil {
@@ -192,6 +201,7 @@ func applyEnv(cfg *Config) error {
 		{"CFHOST_FAILOVER_ROUNDS", func(n int) { cfg.FailoverRounds = n }},
 		{"CFHOST_INTERVAL_MIN", func(n int) { cfg.Interval = time.Duration(n) * time.Minute }},
 		{"CFHOST_CANDIDATE_LIMIT", func(n int) { cfg.CandidateLimit = n }},
+		{"CFHOST_HOSTS_IPS", func(n int) { cfg.HostsIPs = n }},
 	} {
 		if err := envInt(o.name, o.set); err != nil {
 			return err
@@ -277,6 +287,9 @@ func (cfg *Config) normalize() error {
 	}
 	if cfg.CandidateLimit <= 0 {
 		cfg.CandidateLimit = defaultCandidateLimit
+	}
+	if cfg.HostsIPs < minHostsIPs || cfg.HostsIPs > maxHostsIPs {
+		cfg.HostsIPs = clampInt(cfg.HostsIPs, minHostsIPs, maxHostsIPs, "hosts_ips")
 	}
 	if cfg.HostsPath == "" {
 		cfg.HostsPath = defaultHostsPath()

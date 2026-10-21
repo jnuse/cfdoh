@@ -20,10 +20,16 @@ import (
 // creator to write its PID before treating an empty lock file as abandoned.
 const lockGracePeriod = 200 * time.Millisecond
 
-// clientState is the JSON shape of the state file.
+// clientState is the JSON shape of the state file. current_v4/current_v6
+// keep the head address as a single value (status summary, old-file
+// compatibility); current_v4s/current_v6s hold the full written lists
+// (head first). A legacy state with only the single value loads as a
+// one-element list — identical to the old single-address behavior.
 type clientState struct {
 	CurrentV4   string   `json:"current_v4"`
 	CurrentV6   string   `json:"current_v6"`
+	CurrentV4s  []string `json:"current_v4s,omitempty"`
+	CurrentV6s  []string `json:"current_v6s,omitempty"`
 	LastSummary string   `json:"last_summary"`
 	NextRun     int64    `json:"next_run"`
 	FailStreak  int      `json:"fail_streak"`

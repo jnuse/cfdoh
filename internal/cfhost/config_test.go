@@ -91,7 +91,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.Concurrency != 8 || cfg.Timeout != 2000 || cfg.Rounds != 3 ||
 		cfg.Hysteresis != 0.2 || cfg.FailoverRounds != 3 || cfg.Interval != 60*time.Minute ||
-		cfg.CandidateLimit != 256 || !cfg.HTTPVerify {
+		cfg.CandidateLimit != 256 || cfg.HostsIPs != 3 || !cfg.HTTPVerify {
 		t.Fatalf("defaults wrong: %+v", cfg)
 	}
 	if cfg.HostsPath != "/etc/hosts" {
@@ -335,5 +335,36 @@ func TestStateLockLogFollowConfigDir(t *testing.T) {
 	}
 	if got, want := stateDirOf(cfg.StatePath), dir; got != want {
 		t.Fatalf("log directory = %s, want %s", got, want)
+	}
+}
+
+func TestHostsIPsClampAndEnv(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("CFHOST_MANAGED_DOMAINS", "a.example.com")
+	t.Setenv("CFHOST_SOURCES", "list:1.1.1.1")
+
+	t.Setenv("CFHOST_HOSTS_IPS", "99")
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HostsIPs != 8 {
+		t.Fatalf("hosts_ips above max must clamp to 8, got %d", cfg.HostsIPs)
+	}
+	t.Setenv("CFHOST_HOSTS_IPS", "0")
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HostsIPs != 1 {
+		t.Fatalf("hosts_ips below min must clamp to 1, got %d", cfg.HostsIPs)
+	}
+	t.Setenv("CFHOST_HOSTS_IPS", "4")
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HostsIPs != 4 {
+		t.Fatalf("in-range hosts_ips must pass through, got %d", cfg.HostsIPs)
 	}
 }

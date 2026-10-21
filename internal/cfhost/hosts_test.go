@@ -21,7 +21,7 @@ var (
 func hostsFileWithBlock(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "hosts")
-	old := renderBlock(td, netip.MustParseAddr("9.9.9.9"), netip.Addr{}, false)
+	old := renderBlock(td, []netip.Addr{netip.MustParseAddr("9.9.9.9")}, nil, false)
 	if err := os.WriteFile(path, old, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -38,11 +38,11 @@ func snapshotPath(t *testing.T, dir string) string {
 func TestSpliceBlockPreservesOutsideBytes(t *testing.T) {
 	prefix := "user entry\r\n# manual mapping\r\n"
 	suffix := "tail without newline"
-	old := renderBlock(td, netip.MustParseAddr("9.9.9.9"), netip.Addr{}, false)
+	old := renderBlock(td, []netip.Addr{netip.MustParseAddr("9.9.9.9")}, nil, false)
 	data := append([]byte(prefix), old...)
 	data = append(data, suffix...)
 
-	newBlock := renderBlock(td, v4, v6, true)
+	newBlock := renderBlock(td, []netip.Addr{v4}, []netip.Addr{v6}, true)
 	out, changed := spliceBlock(data, newBlock)
 	if !changed {
 		t.Fatal("address change must alter content")
@@ -63,31 +63,31 @@ func TestSpliceBlockPreservesOutsideBytes(t *testing.T) {
 
 func TestSpliceBlockAppendsWithoutMarker(t *testing.T) {
 	data := []byte("entry") // no trailing newline, no block
-	out, changed := spliceBlock(data, renderBlock(td, v4, netip.Addr{}, false))
+	out, changed := spliceBlock(data, renderBlock(td, []netip.Addr{v4}, nil, false))
 	if !changed {
 		t.Fatal("append must change content")
 	}
 	if !bytes.HasPrefix(out, []byte("entry\n")) {
 		t.Fatalf("missing newline inserted:\n%q", out)
 	}
-	if !bytes.HasSuffix(out, renderBlock(td, v4, netip.Addr{}, false)) {
+	if !bytes.HasSuffix(out, renderBlock(td, []netip.Addr{v4}, nil, false)) {
 		t.Fatalf("block not appended:\n%q", out)
 	}
 
 	// Empty file gets just the block.
-	out, _ = spliceBlock(nil, renderBlock(td, v4, netip.Addr{}, false))
-	if !bytes.Equal(out, renderBlock(td, v4, netip.Addr{}, false)) {
+	out, _ = spliceBlock(nil, renderBlock(td, []netip.Addr{v4}, nil, false))
+	if !bytes.Equal(out, renderBlock(td, []netip.Addr{v4}, nil, false)) {
 		t.Fatalf("empty file splice wrong:\n%q", out)
 	}
 }
 
 func TestSpliceBlockMissingEndMarker(t *testing.T) {
 	data := []byte("keep\n# BEGIN cfhost\n1.1.1.1 old\n") // no END marker
-	out, _ := spliceBlock(data, renderBlock(td, v4, netip.Addr{}, false))
+	out, _ := spliceBlock(data, renderBlock(td, []netip.Addr{v4}, nil, false))
 	if !bytes.HasPrefix(out, []byte("keep\n")) {
 		t.Fatalf("prefix lost:\n%q", out)
 	}
-	if !bytes.Equal(out, append([]byte("keep\n"), renderBlock(td, v4, netip.Addr{}, false)...)) {
+	if !bytes.Equal(out, append([]byte("keep\n"), renderBlock(td, []netip.Addr{v4}, nil, false)...)) {
 		t.Fatalf("unterminated block should be rebuilt:\n%q", out)
 	}
 }
@@ -102,7 +102,7 @@ func TestUpdateHostsRoundTripAndMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	written, err := updateHosts(path, snapshotPath(t, dir), td, v4, v6, true)
+	written, err := updateHosts(path, snapshotPath(t, dir), td, []netip.Addr{v4}, []netip.Addr{v6}, true)
 	if err != nil || !written {
 		t.Fatalf("first update: written=%v err=%v", written, err)
 	}
@@ -117,7 +117,7 @@ func TestUpdateHostsRoundTripAndMode(t *testing.T) {
 	if !bytes.HasPrefix(data, []byte("user 127.0.0.1 mapping\r\n")) {
 		t.Fatalf("outside block lost:\n%q", data)
 	}
-	want := renderBlock(td, v4, v6, true)
+	want := renderBlock(td, []netip.Addr{v4}, []netip.Addr{v6}, true)
 	if !bytes.Contains(data, want) {
 		t.Fatalf("block content wrong:\n%q", data)
 	}
@@ -125,7 +125,7 @@ func TestUpdateHostsRoundTripAndMode(t *testing.T) {
 	// Second identical update must not rewrite.
 	before, _ := os.Stat(path)
 	time.Sleep(10 * time.Millisecond)
-	written, err = updateHosts(path, snapshotPath(t, dir), td, v4, v6, true)
+	written, err = updateHosts(path, snapshotPath(t, dir), td, []netip.Addr{v4}, []netip.Addr{v6}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestUpdateHostsRoundTripAndMode(t *testing.T) {
 	}
 
 	// Address change rewrites and rebuilds the block.
-	written, err = updateHosts(path, snapshotPath(t, dir), td, netip.MustParseAddr("5.6.7.8"), netip.Addr{}, false)
+	written, err = updateHosts(path, snapshotPath(t, dir), td, []netip.Addr{netip.MustParseAddr("5.6.7.8")}, nil, false)
 	if err != nil || !written {
 		t.Fatalf("changed update: written=%v err=%v", written, err)
 	}
@@ -146,7 +146,7 @@ func TestUpdateHostsRoundTripAndMode(t *testing.T) {
 	if !bytes.HasPrefix(data, []byte("user 127.0.0.1 mapping\r\n")) {
 		t.Fatalf("outside block lost on rewrite:\n%q", data)
 	}
-	if !bytes.Contains(data, renderBlock(td, netip.MustParseAddr("5.6.7.8"), netip.Addr{}, false)) {
+	if !bytes.Contains(data, renderBlock(td, []netip.Addr{netip.MustParseAddr("5.6.7.8")}, nil, false)) {
 		t.Fatalf("block not rebuilt:\n%q", data)
 	}
 }
@@ -154,12 +154,12 @@ func TestUpdateHostsRoundTripAndMode(t *testing.T) {
 func TestUpdateHostsMissingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "hosts")
-	written, err := updateHosts(path, snapshotPath(t, dir), td, v4, netip.Addr{}, false)
+	written, err := updateHosts(path, snapshotPath(t, dir), td, []netip.Addr{v4}, nil, false)
 	if err != nil || !written {
 		t.Fatalf("missing hosts file should be created: written=%v err=%v", written, err)
 	}
 	data, _ := os.ReadFile(path)
-	if !bytes.Equal(data, renderBlock(td, v4, netip.Addr{}, false)) {
+	if !bytes.Equal(data, renderBlock(td, []netip.Addr{v4}, nil, false)) {
 		t.Fatalf("created file wrong:\n%q", data)
 	}
 	// An empty pre-write state has nothing to lose: no snapshot may appear.
@@ -177,7 +177,7 @@ func TestUpdateHostsTransientReadErrorSkips(t *testing.T) {
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	written, err := updateHosts(path, snapshotPath(t, dir), td, v4, netip.Addr{}, false)
+	written, err := updateHosts(path, snapshotPath(t, dir), td, []netip.Addr{v4}, nil, false)
 	if !errors.Is(err, errHostsSkipped) {
 		t.Fatalf("expected skip signal, got %v", err)
 	}
@@ -194,7 +194,7 @@ func TestUpdateHostsSnapshotKeepsPreWriteBytes(t *testing.T) {
 	path := hostsFileWithBlock(t, dir)
 	first, _ := os.ReadFile(path)
 
-	if _, err := updateHosts(path, snapshotPath(t, dir), td, v4, netip.Addr{}, false); err != nil {
+	if _, err := updateHosts(path, snapshotPath(t, dir), td, []netip.Addr{v4}, nil, false); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "hosts.snapshot"))
@@ -209,7 +209,7 @@ func TestUpdateHostsSnapshotKeepsPreWriteBytes(t *testing.T) {
 	}
 
 	second, _ := os.ReadFile(path)
-	if _, err := updateHosts(path, snapshotPath(t, dir), td, netip.MustParseAddr("5.6.7.8"), netip.Addr{}, false); err != nil {
+	if _, err := updateHosts(path, snapshotPath(t, dir), td, []netip.Addr{netip.MustParseAddr("5.6.7.8")}, nil, false); err != nil {
 		t.Fatal(err)
 	}
 	got, err = os.ReadFile(filepath.Join(dir, "hosts.snapshot"))
@@ -230,7 +230,7 @@ func TestUpdateHostsSnapshotFailureSkipsWrite(t *testing.T) {
 	path := hostsFileWithBlock(t, dir)
 	orig, _ := os.ReadFile(path)
 
-	written, err := updateHosts(path, filepath.Join(dir, "no-such-dir", "hosts.snapshot"), td, v4, netip.Addr{}, false)
+	written, err := updateHosts(path, filepath.Join(dir, "no-such-dir", "hosts.snapshot"), td, []netip.Addr{v4}, nil, false)
 	if !errors.Is(err, errHostsSkipped) {
 		t.Fatalf("snapshot failure must skip, got %v", err)
 	}
@@ -246,7 +246,7 @@ func TestUpdateHostsSnapshotFailureSkipsWrite(t *testing.T) {
 func TestUpdateHostsUnchangedLeavesSnapshotAlone(t *testing.T) {
 	dir := t.TempDir()
 	path := hostsFileWithBlock(t, dir)
-	if _, err := updateHosts(path, snapshotPath(t, dir), td, v4, netip.Addr{}, false); err != nil {
+	if _, err := updateHosts(path, snapshotPath(t, dir), td, []netip.Addr{v4}, nil, false); err != nil {
 		t.Fatal(err)
 	}
 	snap := filepath.Join(dir, "hosts.snapshot")
@@ -254,7 +254,7 @@ func TestUpdateHostsUnchangedLeavesSnapshotAlone(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Same target address: unchanged short-circuits before the snapshot.
-	if written, err := updateHosts(path, snapshotPath(t, dir), td, v4, netip.Addr{}, false); err != nil || written {
+	if written, err := updateHosts(path, snapshotPath(t, dir), td, []netip.Addr{v4}, nil, false); err != nil || written {
 		t.Fatalf("unchanged update: written=%v err=%v", written, err)
 	}
 	after, _ := os.Stat(snap)
@@ -264,14 +264,59 @@ func TestUpdateHostsUnchangedLeavesSnapshotAlone(t *testing.T) {
 }
 
 func TestRenderBlockOrder(t *testing.T) {
-	block := string(renderBlock(td, v4, v6, true))
+	block := string(renderBlock(td, []netip.Addr{v4}, []netip.Addr{v6}, true))
 	want := "# BEGIN cfhost\n1.2.3.4 d1.example.com\n1.2.3.4 d2.example.com\n" +
 		"2606:4700::1111 d1.example.com\n2606:4700::1111 d2.example.com\n# END cfhost\n"
 	if block != want {
 		t.Fatalf("block render wrong:\n%q\nwant\n%q", block, want)
 	}
-	noV6 := string(renderBlock(td, v4, netip.Addr{}, false))
+	noV6 := string(renderBlock(td, []netip.Addr{v4}, nil, false))
 	if strings.Contains(noV6, "2606:") {
 		t.Fatalf("v4-only block must not contain v6 lines:\n%q", noV6)
+	}
+}
+
+func TestRenderBlockSparesOrder(t *testing.T) {
+	// Multi-address render: grouped by address in list order, so each
+	// domain's line order equals the attempt order (head first).
+	ip1 := netip.MustParseAddr("1.1.1.1")
+	ip2 := netip.MustParseAddr("2.2.2.2")
+	v6a := netip.MustParseAddr("2606:4700::1")
+	v6b := netip.MustParseAddr("2606:4700::2")
+	block := string(renderBlock(td, []netip.Addr{ip1, ip2}, []netip.Addr{v6a, v6b}, true))
+	want := "# BEGIN cfhost\n" +
+		"1.1.1.1 d1.example.com\n1.1.1.1 d2.example.com\n" +
+		"2.2.2.2 d1.example.com\n2.2.2.2 d2.example.com\n" +
+		"2606:4700::1 d1.example.com\n2606:4700::1 d2.example.com\n" +
+		"2606:4700::2 d1.example.com\n2606:4700::2 d2.example.com\n" +
+		"# END cfhost\n"
+	if block != want {
+		t.Fatalf("spare render wrong:\n%q\nwant\n%q", block, want)
+	}
+	// A one-element list renders byte-identically to the legacy form.
+	single := string(renderBlock(td, []netip.Addr{ip1}, nil, false))
+	legacy := "# BEGIN cfhost\n1.1.1.1 d1.example.com\n1.1.1.1 d2.example.com\n# END cfhost\n"
+	if single != legacy {
+		t.Fatalf("single-address render must stay byte-identical:\n%q", single)
+	}
+}
+
+func TestTopNByFamily(t *testing.T) {
+	outcomes := []probeOutcome{
+		{addr: netip.MustParseAddr("9.9.9.9"), median: 50 * time.Millisecond, ok: false}, // dead: excluded
+		{addr: netip.MustParseAddr("1.1.1.1"), median: 30 * time.Millisecond, ok: true},
+		{addr: netip.MustParseAddr("2.2.2.2"), median: 10 * time.Millisecond, ok: true},
+		{addr: netip.MustParseAddr("3.3.3.3"), median: 20 * time.Millisecond, ok: true},
+		{addr: netip.MustParseAddr("2606:4700::1"), median: 5 * time.Millisecond, ok: true},
+	}
+	got := topNByFamily(outcomes, false, 2)
+	if len(got) != 2 || got[0].String() != "2.2.2.2" || got[1].String() != "3.3.3.3" {
+		t.Fatalf("top-2 v4 wrong: %v", got)
+	}
+	if all := topNByFamily(outcomes, false, 8); len(all) != 3 {
+		t.Fatalf("fewer ok candidates than n must return what exists: %v", all)
+	}
+	if v6 := topNByFamily(outcomes, true, 4); len(v6) != 1 || v6[0].String() != "2606:4700::1" {
+		t.Fatalf("v6 family filter wrong: %v", v6)
 	}
 }

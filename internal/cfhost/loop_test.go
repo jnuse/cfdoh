@@ -130,6 +130,7 @@ func testConfig(t *testing.T, hosts, state string, sources ...string) *Config {
 		HostsPath:      hosts,
 		StatePath:      state,
 		CandidateLimit: 16,
+		HostsIPs:       defaultHostsIPs,
 	}
 }
 
@@ -266,7 +267,7 @@ func TestRunOnceNoCandidatesNoHistory(t *testing.T) {
 func TestRunOnceProbeFailureKeepsHosts(t *testing.T) {
 	dir := t.TempDir()
 	hostsPath := filepath.Join(dir, "hosts")
-	block := renderBlock([]string{"d.example.com"}, netip.MustParseAddr("9.9.9.9"), netip.Addr{}, false)
+	block := renderBlock([]string{"d.example.com"}, []netip.Addr{netip.MustParseAddr("9.9.9.9")}, nil, false)
 	if err := os.WriteFile(hostsPath, block, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -436,5 +437,89 @@ func TestPassDoneLoggedEveryPass(t *testing.T) {
 	after, _ := os.ReadFile(hostsPath)
 	if !bytes.Equal(before, after) {
 		t.Fatal("v4-fail pass must not touch hosts")
+	}
+}
+
+func TestRunOnceSparesAtomicList(t *testing.T) {
+	// The hysteresis verdict applies to the head only; a kept head keeps the
+	// whole recorded list byte-for-byte (spare reshuffles do not rewrite
+	// hosts), while a switch rebuilds the list from this sweep's ranking.
+	dir := t.TempDir()
+	hostsPath := filepath.Join(dir, "hosts")
+	statePath := filepath.Join(dir, "state.json")
+	cfg := testConfig(t, hostsPath, statePath, "list:1.1.1.1,2.2.2.2,3.3.3.3,9.9.9.9")
+
+	cur := netip.MustParseAddr("9.9.9.9")
+	withFakeProbes(t,
+		probeOutcome{addr: cur, median: 100 * time.Millisecond, ok: true},
+		probeOutcome{addr: netip.MustParseAddr("1.1.1.1"), median: 30 * time.Millisecond, ok: true},
+		probeOutcome{addr: netip.MustParseAddr("2.2.2.2"), median: 10 * time.Millisecond, ok: true},
+		probeOutcome{addr: netip.MustParseAddr("3.3.3.3"), median: 20 * time.Millisecond, ok: true})
+
+	// Pass 1: cur 9.9.9.9 beaten by 2.2.2.2 (90% gain) — switch, list =
+	// top-3 ranking [2.2.2.2, 3.3.3.3, 1.1.1.1].
+	if err := RunOnce(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(hostsPath)
+	for _, want := range []string{"2.2.2.2 d.example.com", "3.3.3.3 d.example.com", "1.1.1.1 d.example.com"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("pass 1 must write head plus spares, missing %q:\n%q", want, data)
+		}
+	}
+	st, _ := loadState(statePath)
+	if len(st.CurrentV4s) != 3 || st.CurrentV4s[0] != "2.2.2.2" {
+		t.Fatalf("recorded list wrong: %v", st.CurrentV4s)
+	}
+
+	// Pass 2: same head (2.2.2.2 at 15ms, best 1.1.1.1 at 13ms — a 13%
+	// gain, under the 20% switch threshold), spares re-ranked and one
+	// slower than before — the whole list must stay untouched.
+	withFakeProbes(t,
+		probeOutcome{addr: netip.MustParseAddr("2.2.2.2"), median: 15 * time.Millisecond, ok: true},
+		probeOutcome{addr: netip.MustParseAddr("1.1.1.1"), median: 13 * time.Millisecond, ok: true},
+		probeOutcome{addr: netip.MustParseAddr("3.3.3.3"), median: 45 * time.Millisecond, ok: true})
+	before, _ := os.ReadFile(hostsPath)
+	beforeStat, _ := os.Stat(hostsPath)
+	if err := RunOnce(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(hostsPath)
+	if !bytes.Equal(before, after) {
+		t.Fatalf("kept head must keep the whole list:\nbefore %q\nafter %q", before, after)
+	}
+	afterStat, _ := os.Stat(hostsPath)
+	if !afterStat.ModTime().Equal(beforeStat.ModTime()) {
+		t.Fatal("kept pass must not rewrite hosts")
+	}
+	st, _ = loadState(statePath)
+	if st.CurrentV4 != "2.2.2.2" || len(st.CurrentV4s) != 3 || st.CurrentV4s[2] != "1.1.1.1" {
+		t.Fatalf("kept list must stay as recorded: %v", st.CurrentV4s)
+	}
+}
+
+func TestRunOnceLegacyStateMigratesSingleAddress(t *testing.T) {
+	// A legacy state file (single current_v4, no list) loads as a one-element
+	// list: the first kept pass may shrink the block to the single address,
+	// and the next switch rebuilds a full spare list.
+	dir := t.TempDir()
+	hostsPath := filepath.Join(dir, "hosts")
+	statePath := filepath.Join(dir, "state.json")
+	cfg := testConfig(t, hostsPath, statePath, "list:9.9.9.9,1.1.1.1")
+
+	cur := netip.MustParseAddr("9.9.9.9")
+	// Seed a legacy state file: single current_v4, no list field.
+	if err := saveState(statePath, clientState{CurrentV4: cur.String()}); err != nil {
+		t.Fatal(err)
+	}
+	withFakeProbes(t,
+		probeOutcome{addr: cur, median: 20 * time.Millisecond, ok: true},
+		probeOutcome{addr: netip.MustParseAddr("1.1.1.1"), median: 100 * time.Millisecond, ok: true})
+	if err := RunOnce(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := loadState(statePath)
+	if st.CurrentV4 != "9.9.9.9" || len(st.CurrentV4s) != 1 || st.CurrentV4s[0] != "9.9.9.9" {
+		t.Fatalf("legacy state must migrate to a one-element list: %v", st.CurrentV4s)
 	}
 }

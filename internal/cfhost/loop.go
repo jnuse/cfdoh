@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"reflect"
+	"sort"
 	"time"
 )
 
@@ -47,6 +48,15 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 		}
 	}
 	v4top, v6top := topByFamily(outcomes)
+
+	// Legacy state migration: a single-value current loads as a one-element
+	// list (identical to the old behavior); an absent list starts fresh.
+	if len(st.CurrentV4s) == 0 && st.CurrentV4 != "" {
+		st.CurrentV4s = []string{st.CurrentV4}
+	}
+	if len(st.CurrentV6s) == 0 && st.CurrentV6 != "" {
+		st.CurrentV6s = []string{st.CurrentV6}
+	}
 
 	// oldCur feeds the per-pass summary line: the address in force when
 	// this pass started (st.CurrentV4 is overwritten by the decision below).
@@ -107,15 +117,31 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 	keepV4, streak, forced := decideHysteresis(hasCurV4, curV4Alive, st.FailStreak,
 		cfg.FailoverRounds, curV4Median, v4top.median, cfg.Hysteresis)
 	newV4 := v4top.addr
+	newV4s := topNByFamily(outcomes, false, cfg.HostsIPs)
 	if keepV4 {
 		newV4 = curV4
+		// The head stays: the whole list stays as-is (atomic list — spare
+		// reshuffles would rewrite hosts every pass for no primary gain).
+		newV4s = parseStateCandidates(st.CurrentV4s)
 	}
 
 	// --- v6 hysteresis (no fail-streak; v6 loss keeps the old entry) ---
 	newV6, hasV6 := decideV6(st.CurrentV6, byAddr, v6top, cfg.Hysteresis)
+	newV6s := topNByFamily(outcomes, true, cfg.HostsIPs)
+	if hasV6 {
+		// The kept head (decideV6 returned the recorded current) keeps the
+		// recorded list; an adopted head rebuilds from this sweep's ranking —
+		// same atomic-list rule as v4. Value comparison, not pointer: the
+		// sweep may have no ok v6 at all while a current entry lives on.
+		if st.CurrentV6 != "" && newV6.String() == st.CurrentV6 {
+			newV6s = parseStateCandidates(st.CurrentV6s)
+		}
+	} else {
+		newV6s = nil
+	}
 
 	written, err := updateHosts(cfg.HostsPath, hostsSnapshotPath(cfg.StatePath),
-		cfg.ManagedDomains, newV4, newV6, hasV6)
+		cfg.ManagedDomains, newV4s, newV6s, hasV6)
 	if err != nil {
 		// Transient hosts read/write failure (errHostsSkipped): nothing was
 		// written, the current addresses and the fail streak stay as-is, and
@@ -128,9 +154,12 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 	}
 	st.FailStreak = streak
 	st.CurrentV4 = newV4.String()
+	st.CurrentV4s = addrStrings(newV4s)
 	st.CurrentV6 = ""
+	st.CurrentV6s = nil
 	if hasV6 {
 		st.CurrentV6 = newV6.String()
+		st.CurrentV6s = addrStrings(newV6s)
 	}
 	st.LastSummary = fmt.Sprintf("tested=%d ok=%d best_v4=%s %dms",
 		len(cands), okCount, v4top.addr.String(), v4top.median.Milliseconds())
@@ -142,7 +171,7 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 	// decision detail: what changed and against which baseline
 	switch {
 	case forced:
-		passDone("forced", fmt.Sprintf("old=%s (fail-streak)", oldCur))
+		passDone("forced", fmt.Sprintf("old=%s (fail-streak) ips=%d", oldCur, len(newV4s)))
 	case keepV4:
 		gain := 0.0
 		if curV4Median > 0 {
@@ -165,7 +194,7 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 	default:
 		// a switch decision: the block was written, or the rendered block
 		// already matched the file (a state/file reconciliation pass)
-		passDone("updated", fmt.Sprintf("old=%s", oldCur))
+		passDone("updated", fmt.Sprintf("old=%s ips=%d", oldCur, len(newV4s)))
 	}
 
 	persist()
@@ -326,6 +355,31 @@ func topByFamily(outcomes []probeOutcome) (v4, v6 *probeOutcome) {
 		}
 	}
 	return v4, v6
+}
+
+// topNByFamily returns up to n ok addresses of one family ordered by median
+// ascending (ties keep candidate order). It is the spare list written after
+// the head: index 0 is the sweep's best, exactly the hysteresis candidate.
+func topNByFamily(outcomes []probeOutcome, v6 bool, n int) []netip.Addr {
+	var out []netip.Addr
+	type ranked struct {
+		addr   netip.Addr
+		median time.Duration
+	}
+	var ok []ranked
+	for _, o := range outcomes {
+		if o.ok && o.addr.Is4() != v6 {
+			ok = append(ok, ranked{o.addr, o.median})
+		}
+	}
+	sort.SliceStable(ok, func(i, j int) bool { return ok[i].median < ok[j].median })
+	for _, r := range ok {
+		if len(out) >= n {
+			break
+		}
+		out = append(out, r.addr)
+	}
+	return out
 }
 
 func (cfg *Config) probeOptions() probeOptions {

@@ -69,18 +69,25 @@ func snapshotHosts(snapshotPath string, data []byte) error {
 	return nil
 }
 
-// renderBlock builds the managed block: one line per domain for IPv4, then
-// one line per domain for IPv6 when available.
-func renderBlock(domains []string, v4, v6 netip.Addr, hasV6 bool) []byte {
+// renderBlock builds the managed block. Each family renders one line per
+// (address, domain) pair, grouped by address in list order (the head first):
+// the per-domain line order in the file is exactly the attempt order the
+// OS resolver returns, so the head stays the primary and the spares follow.
+// A one-element list renders byte-identically to the old single-address form.
+func renderBlock(domains []string, v4s, v6s []netip.Addr, hasV6 bool) []byte {
 	var b bytes.Buffer
 	b.WriteString(hostsBegin)
 	b.WriteByte('\n')
-	for _, d := range domains {
-		fmt.Fprintf(&b, "%s %s\n", v4.String(), d)
+	for _, ip := range v4s {
+		for _, d := range domains {
+			fmt.Fprintf(&b, "%s %s\n", ip.String(), d)
+		}
 	}
 	if hasV6 {
-		for _, d := range domains {
-			fmt.Fprintf(&b, "%s %s\n", v6.String(), d)
+		for _, ip := range v6s {
+			for _, d := range domains {
+				fmt.Fprintf(&b, "%s %s\n", ip.String(), d)
+			}
 		}
 	}
 	b.WriteString(hostsEnd)
@@ -142,7 +149,7 @@ func spliceBlock(data, block []byte) ([]byte, bool) {
 // written. Every transient failure — read, snapshot, or the in-place write
 // (e.g. an antivirus briefly holding hosts) — returns errHostsSkipped so
 // the caller treats the round as skipped and the daemon stays alive.
-func updateHosts(path, snapshotPath string, domains []string, v4, v6 netip.Addr, hasV6 bool) (bool, error) {
+func updateHosts(path, snapshotPath string, domains []string, v4s, v6s []netip.Addr, hasV6 bool) (bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		// Transient read failure (e.g. antivirus briefly locking hosts on
@@ -150,7 +157,7 @@ func updateHosts(path, snapshotPath string, domains []string, v4, v6 netip.Addr,
 		slog.Warn("cfhost: hosts read failed, skipping hosts update this round", "error", err.Error())
 		return false, errHostsSkipped
 	}
-	content, changed := spliceBlock(data, renderBlock(domains, v4, v6, hasV6))
+	content, changed := spliceBlock(data, renderBlock(domains, v4s, v6s, hasV6))
 	if !changed {
 		return false, nil
 	}
