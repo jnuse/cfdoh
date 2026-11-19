@@ -48,13 +48,15 @@ func refuseDowngradeRedirect(req *http.Request, via []*http.Request) error {
 
 // fetcher bundles the injectable dependencies of candidate fetching.
 type fetcher struct {
-	client   *http.Client
-	resolver *net.Resolver
+	client       *http.Client
+	resolver     *net.Resolver
+	dohEndpoints [2]string
 }
 
 var defaultFetcher = &fetcher{
-	client:   &http.Client{Timeout: fetchTimeout, CheckRedirect: refuseDowngradeRedirect},
-	resolver: net.DefaultResolver,
+	client:       &http.Client{Timeout: fetchTimeout, CheckRedirect: refuseDowngradeRedirect},
+	resolver:     net.DefaultResolver,
+	dohEndpoints: [2]string{managedDNSAliEndpoint, managedDNSCloudflareEndpoint},
 }
 
 type sourceSpec struct {
@@ -111,10 +113,29 @@ type feedIP struct {
 	IP string `json:"ip"`
 }
 
-// fetchCandidates pulls all sources, keeps only public unicast addresses,
-// deduplicates in first-seen order and truncates to limit. The second return
-// value reports whether every source failed (no valid addresses at all).
+// fetchCandidates pulls configured sources, keeps only public unicast
+// addresses, deduplicates in first-seen order and truncates to limit. The
+// second return value reports whether no source yielded a usable address.
 func fetchCandidates(ctx context.Context, sources []string, f *fetcher, limit int) ([]netip.Addr, bool) {
+	candidates, sourceOK := fetchConfiguredCandidates(ctx, sources, f)
+	candidates = mergeCandidateSets(candidates, nil, limit)
+	return candidates, !sourceOK
+}
+
+// fetchCandidatesWithManagedDomains merges configured sources with the
+// independently resolved A/AAAA answers for every managed domain.
+func fetchCandidatesWithManagedDomains(ctx context.Context, sources, managedDomains []string, f *fetcher, limit, concurrency int) ([]netip.Addr, bool) {
+	configured, sourceOK := fetchConfiguredCandidates(ctx, sources, f)
+	managed := fetchManagedDomainCandidates(ctx, managedDomains, f, concurrency)
+	candidates := mergeCandidateSets(configured, managed, limit)
+	return candidates, !sourceOK && len(managed) == 0
+}
+
+// fetchConfiguredCandidates preserves source order while filtering and
+// deduplicating addresses. It intentionally does not apply the global limit:
+// managed-domain answers need to reserve capacity before the source tail is
+// truncated.
+func fetchConfiguredCandidates(ctx context.Context, sources []string, f *fetcher) ([]netip.Addr, bool) {
 	var cands []netip.Addr
 	seen := map[string]bool{}
 	anyOK := false
@@ -132,7 +153,7 @@ func fetchCandidates(ctx context.Context, sources []string, f *fetcher, limit in
 		kept := 0
 		for _, a := range addrs {
 			a = a.Unmap()
-			if !publicUnicast(a) {
+			if !a.IsValid() || !publicUnicast(a) {
 				continue
 			}
 			k := a.String()
@@ -149,10 +170,77 @@ func fetchCandidates(ctx context.Context, sources []string, f *fetcher, limit in
 		}
 		anyOK = true
 	}
-	if limit > 0 && len(cands) > limit {
-		cands = cands[:limit]
+	return cands, anyOK
+}
+
+// mergeCandidateSets keeps the longest configured-source prefix that fits
+// after reserving slots for managed addresses not covered by that prefix.
+// DNS addresses already present in the retained prefix stay in their source
+// positions; missing addresses are appended in DNS result order.
+func mergeCandidateSets(configured, managed []netip.Addr, limit int) []netip.Addr {
+	configured = uniquePublicAddresses(configured)
+	managed = uniquePublicAddresses(managed)
+	if limit <= 0 {
+		limit = int(^uint(0) >> 1)
 	}
-	return cands, !anyOK
+	if len(managed) > limit {
+		managed = managed[:limit]
+	}
+
+	managedSet := make(map[netip.Addr]struct{}, len(managed))
+	for _, addr := range managed {
+		managedSet[addr] = struct{}{}
+	}
+
+	prefixLen := 0
+	coveredManaged := 0
+	for prefixLen < len(configured) {
+		_, isManaged := managedSet[configured[prefixLen]]
+		nextCovered := coveredManaged
+		if isManaged {
+			nextCovered++
+		}
+		missingManaged := len(managed) - nextCovered
+		if prefixLen+1+missingManaged > limit {
+			break
+		}
+		prefixLen++
+		coveredManaged = nextCovered
+	}
+
+	merged := append([]netip.Addr(nil), configured[:prefixLen]...)
+	seen := make(map[netip.Addr]struct{}, len(merged)+len(managed))
+	for _, addr := range merged {
+		seen[addr] = struct{}{}
+	}
+	for _, addr := range managed {
+		if _, exists := seen[addr]; exists {
+			continue
+		}
+		merged = append(merged, addr)
+		seen[addr] = struct{}{}
+	}
+	return merged
+}
+
+func uniquePublicAddresses(addrs []netip.Addr) []netip.Addr {
+	seen := make(map[netip.Addr]struct{}, len(addrs))
+	unique := make([]netip.Addr, 0, len(addrs))
+	for _, addr := range addrs {
+		if !addr.IsValid() {
+			continue
+		}
+		addr = addr.Unmap()
+		if !publicUnicast(addr) {
+			continue
+		}
+		if _, exists := seen[addr]; exists {
+			continue
+		}
+		seen[addr] = struct{}{}
+		unique = append(unique, addr)
+	}
+	return unique
 }
 
 // publicUnicast filters loopback, private, link-local, multicast and

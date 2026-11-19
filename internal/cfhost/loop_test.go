@@ -116,8 +116,23 @@ func TestDecideV6(t *testing.T) {
 	}
 }
 
+func withPassCandidateFetcher(t *testing.T, fetch func(context.Context, *Config) ([]netip.Addr, bool)) {
+	t.Helper()
+	old := fetchCandidatesForPass
+	fetchCandidatesForPass = fetch
+	t.Cleanup(func() { fetchCandidatesForPass = old })
+}
+
+func withSourceOnlyCandidateFetcher(t *testing.T) {
+	t.Helper()
+	withPassCandidateFetcher(t, func(ctx context.Context, cfg *Config) ([]netip.Addr, bool) {
+		return fetchCandidates(ctx, cfg.Sources, defaultFetcher, cfg.CandidateLimit)
+	})
+}
+
 func testConfig(t *testing.T, hosts, state string, sources ...string) *Config {
 	t.Helper()
+	withSourceOnlyCandidateFetcher(t)
 	return &Config{
 		ManagedDomains: []string{"d.example.com"},
 		Sources:        sources,
@@ -336,6 +351,7 @@ func TestRunOnceLockedRefusesWhileHeld(t *testing.T) {
 }
 
 func TestLoopReloadsConfigEachPass(t *testing.T) {
+	withSourceOnlyCandidateFetcher(t)
 	// The daemon refreshes cfhost.json before every pass: an edit (a new
 	// managed domain) applies on the next round without a restart; a broken
 	// file keeps the previous configuration; a relocated StatePath or

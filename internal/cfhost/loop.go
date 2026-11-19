@@ -18,6 +18,13 @@ import (
 // inject deterministic outcomes to exercise the hosts-update path offline.
 var runProbes = probeCandidates
 
+// fetchCandidatesForPass isolates network candidate lookup so RunOnce tests
+// can inject deterministic configured-source and DoH results.
+var fetchCandidatesForPass = func(ctx context.Context, cfg *Config) ([]netip.Addr, bool) {
+	return fetchCandidatesWithManagedDomains(ctx, cfg.Sources, cfg.ManagedDomains,
+		defaultFetcher, cfg.CandidateLimit, cfg.Concurrency)
+}
+
 // RunOnce executes one full pass. When every source fails and no previous
 // candidate list exists it returns an error without touching hosts. When the
 // v4 sweep fails entirely, hosts stays untouched but the state is updated.
@@ -29,7 +36,7 @@ func RunOnce(ctx context.Context, cfg *Config) error {
 
 	st, _ := loadState(cfg.StatePath)
 
-	cands, allFailed := fetchCandidates(ctx, cfg.Sources, defaultFetcher, cfg.CandidateLimit)
+	cands, allFailed := fetchCandidatesForPass(ctx, cfg)
 	if allFailed || len(cands) == 0 {
 		fallback := parseStateCandidates(st.Candidates)
 		if len(fallback) == 0 {
