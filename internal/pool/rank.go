@@ -8,8 +8,11 @@ import (
 
 // Capacity constants (spec: 集中一处定义).
 const (
-	// PoolSize is the per-family serving size.
+	// PoolSize is the existing per-family ranking and fallback serving size.
 	PoolSize = 6
+	// DefaultIPv4Limit and DefaultIPv6Limit bound default layered answers.
+	DefaultIPv4Limit = 10
+	DefaultIPv6Limit = 8
 	// MaxScopedPools caps client-prefix pools, MaxDefaultSources caps
 	// self-learning sources, MaxIspPools caps operator pools, MaxHostSources
 	// caps per-host pool reporting sources.

@@ -1282,3 +1282,86 @@ func TestPathAliasConflictSkipped(t *testing.T) {
 		}
 	}
 }
+
+type feedControllerStub struct {
+	enabled []bool
+	err     error
+}
+
+func (f *feedControllerStub) SetEnabled(enabled bool) error {
+	f.enabled = append(f.enabled, enabled)
+	return f.err
+}
+
+func TestPreferredFeedSwitchAuthorizationAndValidation(t *testing.T) {
+	loadRanges(t)
+	cfg := baseCfg()
+	cfg.AdminToken = "admin-tok"
+	cfg.HubToken = "hub-tok"
+	controller := &feedControllerStub{}
+	s := NewWithFeedController(cfg, controller)
+	ts := httptest.NewServer(s.handler())
+	t.Cleanup(ts.Close)
+
+	post := func(token, body string) int {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/preferred", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if code := post("hub-tok", `{"scope":"isp:chinanet","ipv4":["104.16.1.20"],"cfhub":false}`); code != http.StatusForbidden {
+		t.Fatalf("hub feed switch = %d, want 403", code)
+	}
+	if len(controller.enabled) != 0 {
+		t.Fatalf("hub token changed feed state: %v", controller.enabled)
+	}
+	if code := post("hub-tok", `{"scope":"isp:chinanet","ipv4":["104.16.1.20"]}`); code != http.StatusOK {
+		t.Fatalf("hub ISP report without switch = %d, want 200", code)
+	}
+	if len(controller.enabled) != 0 {
+		t.Fatalf("omitted switch changed feed state: %v", controller.enabled)
+	}
+	if code := post("admin-tok", `{"scope":"default","source":"feed-switch-omitted","ipv4":["104.16.1.19"]}`); code != http.StatusOK {
+		t.Fatalf("admin report without switch = %d, want 200", code)
+	}
+	if len(controller.enabled) != 0 {
+		t.Fatalf("admin omission changed feed state: %v", controller.enabled)
+	}
+
+	if code := post("admin-tok", `{"scope":"isp:chinanet","ipv4":["1.1.1.1"],"cfhub":false}`); code != http.StatusBadRequest {
+		t.Fatalf("invalid pool with switch = %d, want 400", code)
+	}
+	if len(controller.enabled) != 0 {
+		t.Fatalf("invalid pool changed feed state: %v", controller.enabled)
+	}
+
+	controller.err = fmt.Errorf("state persistence failed")
+	if code := post("admin-tok", `{"scope":"default","source":"feed-persist-fail","ipv4":["104.16.1.21"],"cfhub":false}`); code != http.StatusInternalServerError {
+		t.Fatalf("setter error = %d, want 500", code)
+	}
+	for _, source := range pool.LearnedStatus().Sources {
+		if source.Source == "feed-persist-fail" {
+			t.Fatal("pool was written after feed-state persistence failed")
+		}
+	}
+	if len(controller.enabled) != 1 || controller.enabled[0] {
+		t.Fatalf("failed setter calls = %v, want [false]", controller.enabled)
+	}
+
+	controller.err = nil
+	if code := post("admin-tok", `{"scope":"default","source":"feed-switch-disabled","ipv4":["104.16.1.22"],"cfhub":false}`); code != http.StatusOK {
+		t.Fatalf("admin disable switch = %d, want 200", code)
+	}
+	if code := post("admin-tok", `{"scope":"default","source":"feed-switch-enabled","ipv4":["104.16.1.23"],"cfhub":true}`); code != http.StatusOK {
+		t.Fatalf("admin enable switch = %d, want 200", code)
+	}
+	if len(controller.enabled) != 3 || controller.enabled[1] || !controller.enabled[2] {
+		t.Fatalf("setter calls = %v, want [false false true]", controller.enabled)
+	}
+}

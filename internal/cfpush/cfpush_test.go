@@ -145,6 +145,56 @@ func TestUploadRejectsUnexpectedBody(t *testing.T) {
 	}
 }
 
+func TestUploadOptionalCFHubField(t *testing.T) {
+	bodies := make(chan map[string]any, 3)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		bodies <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	boolPtr := func(value bool) *bool { return &value }
+	cases := []struct {
+		name        string
+		value       *bool
+		wantPresent bool
+		wantValue   bool
+	}{
+		{name: "omitted"},
+		{name: "enabled", value: boolPtr(true), wantPresent: true, wantValue: true},
+		{name: "disabled", value: boolPtr(false), wantPresent: true, wantValue: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{URL: srv.URL, Token: "t", Source: "cfpush", TTL: 60, CFHub: tc.value}
+			if err := Upload(cfg, &Pool{Scope: "isp:national"}); err != nil {
+				t.Fatal(err)
+			}
+			body := <-bodies
+			value, present := body["cfhub"]
+			if present != tc.wantPresent {
+				t.Fatalf("cfhub presence = %v, want %v: %v", present, tc.wantPresent, body)
+			}
+			if present && value != tc.wantValue {
+				t.Fatalf("cfhub = %v, want %v", value, tc.wantValue)
+			}
+		})
+	}
+
+	cfg, err := LoadConfig(writeConfig(t, `{"url":"https://example.com/admin/preferred","token":"t","cfhub":false,"pools":[{"scope":"isp:national"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CFHub == nil || *cfg.CFHub {
+		t.Fatalf("explicit false was not preserved: %#v", cfg.CFHub)
+	}
+}
+
 func TestRunFileAggregatesFailures(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"ok":false}`))

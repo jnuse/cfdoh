@@ -9,12 +9,15 @@ package hubfeed
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jnuse/cfdoh/internal/cfrange"
@@ -24,10 +27,44 @@ import (
 )
 
 const (
-	fetchTimeout = 10 * time.Second
-	maxFeedBytes = 2 << 20 // 2MiB
-	perFamilyCap = 6       // addresses adopted per pool family
+	fetchTimeout  = 10 * time.Second
+	maxFeedBytes  = 2 << 20 // 2MiB
+	ipv4FamilyCap = 10
+	ipv6FamilyCap = 8
+	stateVersion  = 1
 )
+
+var errStaticallyDisabled = errors.New("pool feed is statically disabled")
+
+type stateFile struct {
+	Version int   `json:"version"`
+	Enabled *bool `json:"enabled"`
+}
+
+// Controller owns the live feed switch and serializes pool installation
+// against state transitions. Fetching stays outside mu; generation checks
+// prevent a stale in-flight response from being installed after a toggle.
+type Controller struct {
+	cfg       *config.Config
+	statePath string
+	available bool
+
+	mu         sync.Mutex
+	enabled    bool
+	generation uint64
+	started    bool
+	wake       chan struct{}
+}
+
+// NewController creates a feed controller. A configured feed defaults to
+// enabled; a statically disabled or empty URL remains unavailable.
+func NewController(cfg *config.Config, statePath string) *Controller {
+	available := cfg != nil && !cfg.PoolFeedDisabled && strings.TrimSpace(cfg.PoolFeedURL) != ""
+	return &Controller{
+		cfg: cfg, statePath: statePath, available: available,
+		enabled: available, wake: make(chan struct{}, 1),
+	}
+}
 
 // ispFeedName validates feed isp fields (same alphabet as the isp table).
 var ispFeedName = regexp.MustCompile(`^[a-z][a-z0-9-]{1,23}$`)
@@ -57,39 +94,186 @@ var httpClient = &http.Client{
 	},
 }
 
-// Start launches the background refresh loop: one immediate pull, then one
-// every PoolFeedIntervalSec. An empty POOL_FEED_URL disables the feature.
-func Start(ctx context.Context, cfg *config.Config) error {
-	if cfg == nil || cfg.PoolFeedDisabled || cfg.PoolFeedURL == "" {
-		slog.Info("pool feed disabled")
+// LoadState restores the optional persisted feed selection. Missing or
+// unreadable snapshots use the configured default and never block startup.
+func (c *Controller) LoadState() error {
+	if c == nil {
 		return nil
 	}
-	go func() {
-		if err := RefreshOnce(ctx, cfg); err != nil {
-			slog.Warn("pool feed initial refresh failed", "error", err.Error())
+	if c.statePath == "" {
+		c.useDefaultState()
+		return nil
+	}
+	data, err := os.ReadFile(c.statePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			c.useDefaultState()
+			return nil
 		}
-		interval := cfg.PoolFeedIntervalSec
-		if interval <= 0 {
-			interval = 60
-		}
-		ticker := time.NewTicker(time.Duration(interval) * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if err := RefreshOnce(ctx, cfg); err != nil {
-					slog.Warn("pool feed refresh failed", "error", err.Error())
-				}
-			}
-		}
-	}()
+		c.useDefaultState()
+		return err
+	}
+	var state stateFile
+	if err := json.Unmarshal(data, &state); err != nil {
+		slog.Warn("pool feed state unreadable; using default", "path", c.statePath, "error", err)
+		c.useDefaultState()
+		return nil
+	}
+	if state.Version != stateVersion || state.Enabled == nil {
+		slog.Warn("pool feed state invalid; using default", "path", c.statePath, "version", state.Version)
+		c.useDefaultState()
+		return nil
+	}
+
+	c.mu.Lock()
+	c.enabled = *state.Enabled && c.available
+	c.generation++
+	if !c.enabled {
+		pool.RemoveIspSource("pool-feed")
+	}
+	c.mu.Unlock()
 	return nil
 }
 
-// RefreshOnce pulls, validates and installs the public pools in one pass.
-func RefreshOnce(ctx context.Context, cfg *config.Config) error {
+// useDefaultState applies the configured startup default and removes restored
+// feed pools only when the feed is statically unavailable.
+func (c *Controller) useDefaultState() {
+	c.mu.Lock()
+	c.enabled = c.available
+	c.generation++
+	if !c.enabled {
+		pool.RemoveIspSource("pool-feed")
+	}
+	c.mu.Unlock()
+}
+
+// SaveState snapshots the current selection when persistence is configured.
+func (c *Controller) SaveState() error {
+	if c == nil || c.statePath == "" {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.writeStateLocked(c.enabled)
+}
+
+// Enabled reports the current runtime selection.
+func (c *Controller) Enabled() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.enabled
+}
+
+// SetEnabled persists a requested selection before applying it. Repeated
+// values are idempotent; enabling a statically unavailable feed is rejected.
+func (c *Controller) SetEnabled(enabled bool) error {
+	if c == nil {
+		return errors.New("pool feed controller is unavailable")
+	}
+	if enabled && !c.available {
+		return errStaticallyDisabled
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.statePath != "" {
+		if err := c.writeStateLocked(enabled); err != nil {
+			return fmt.Errorf("persist pool feed state: %w", err)
+		}
+	}
+	if c.enabled == enabled {
+		if !enabled {
+			pool.RemoveIspSource("pool-feed")
+		}
+		return nil
+	}
+	c.enabled = enabled
+	c.generation++
+	if !enabled {
+		pool.RemoveIspSource("pool-feed")
+	} else if c.started {
+		select {
+		case c.wake <- struct{}{}:
+		default:
+		}
+	}
+	return nil
+}
+
+func (c *Controller) writeStateLocked(enabled bool) error {
+	selection := enabled
+	data, err := json.Marshal(stateFile{Version: stateVersion, Enabled: &selection})
+	if err != nil {
+		return err
+	}
+	return writeStateFile(c.statePath, data)
+}
+
+// Start launches one worker that performs an immediate refresh when enabled,
+// then refreshes on the configured interval or when a disabled feed is enabled.
+func (c *Controller) Start(ctx context.Context) error {
+	if c == nil || c.cfg == nil {
+		return errors.New("pool feed configuration is unavailable")
+	}
+	c.mu.Lock()
+	if c.started {
+		c.mu.Unlock()
+		return nil
+	}
+	c.started = true
+	available := c.available
+	c.mu.Unlock()
+	if !available {
+		slog.Info("pool feed disabled")
+		return nil
+	}
+	go c.run(ctx)
+	return nil
+}
+
+func (c *Controller) run(ctx context.Context) {
+	interval := c.cfg.PoolFeedIntervalSec
+	if interval <= 0 {
+		interval = 60
+	}
+	ticker := time.NewTicker(time.Duration(interval) * time.Second)
+	defer ticker.Stop()
+	c.refreshAndLog(ctx, "initial")
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.refreshAndLog(ctx, "scheduled")
+		case <-c.wake:
+			c.refreshAndLog(ctx, "enabled")
+		}
+	}
+}
+
+func (c *Controller) refreshAndLog(ctx context.Context, reason string) {
+	if err := c.RefreshOnce(ctx); err != nil {
+		slog.Warn("pool feed "+reason+" refresh failed", "error", err.Error())
+	}
+}
+
+// RefreshOnce fetches and validates the public pools, then installs them only
+// if the enabled state and generation have not changed during the request.
+func (c *Controller) RefreshOnce(ctx context.Context) error {
+	if c == nil || c.cfg == nil {
+		return errors.New("pool feed configuration is unavailable")
+	}
+	c.mu.Lock()
+	if !c.enabled {
+		c.mu.Unlock()
+		return nil
+	}
+	generation := c.generation
+	cfg := c.cfg
+	c.mu.Unlock()
+
 	started := time.Now()
 	doc, err := fetch(ctx, cfg.PoolFeedURL)
 	if err != nil {
@@ -130,6 +314,13 @@ func RefreshOnce(ctx context.Context, cfg *config.Config) error {
 		adopted[scope] = merged
 	}
 
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.enabled || c.generation != generation {
+		slog.Info("event", "event", "pool_feed_refresh", "detail",
+			fmt.Sprintf("ok=false discarded=state_changed elapsed_ms=%d", time.Since(started).Milliseconds()))
+		return nil
+	}
 	for scope, families := range adopted {
 		if len(families[0]) == 0 && len(families[1]) == 0 {
 			continue
@@ -152,6 +343,10 @@ func validateAddresses(entry *feedPool) ([]string, error) {
 	ranges := cfrange.Current()
 	if ranges == nil {
 		return nil, fmt.Errorf("cloudflare ranges not loaded yet")
+	}
+	limit := ipv4FamilyCap
+	if entry.Family == 6 {
+		limit = ipv6FamilyCap
 	}
 	var out []string
 	seen := make(map[string]bool)
@@ -176,7 +371,7 @@ func validateAddresses(entry *feedPool) ([]string, error) {
 			continue
 		}
 		seen[ip] = true
-		if len(out) < perFamilyCap {
+		if len(out) < limit {
 			out = append(out, ip)
 		}
 	}
@@ -189,6 +384,28 @@ func validateAddresses(entry *feedPool) ([]string, error) {
 func reject(entry *feedPool, format string, args ...any) {
 	slog.Warn("event", "event", "pool_feed_rejected", "detail",
 		fmt.Sprintf("pool isp=%s family=%d rejected: %s", entry.ISP, entry.Family, fmt.Sprintf(format, args...)))
+}
+
+func writeStateFile(path string, data []byte) error {
+	tmp := path + ".tmp"
+	file, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func fetch(ctx context.Context, url string) (*feedDoc, error) {

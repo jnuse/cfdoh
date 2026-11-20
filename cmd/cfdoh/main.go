@@ -30,13 +30,14 @@ const (
 	cacheSnapshotInterval  = 10 * time.Minute
 )
 
-// probeStatePaths derives the pool/h3/ech snapshot file names from the
+// probeStatePaths derives the pool/h3/ech/feed snapshot file names from the
 // directory of the cache snapshot path.
-func probeStatePaths(cachePath string) (poolState, h3State, echState string) {
+func probeStatePaths(cachePath string) (poolState, h3State, echState, feedState string) {
 	dir := filepath.Dir(cachePath)
 	return filepath.Join(dir, "pool-state.json"),
 		filepath.Join(dir, "h3-state.json"),
-		filepath.Join(dir, "ech-state.json")
+		filepath.Join(dir, "ech-state.json"),
+		filepath.Join(dir, "pool-feed-state.json")
 }
 
 func main() {
@@ -72,11 +73,13 @@ func run() error {
 			slog.Info("event", "event", "ecs_domains_loaded", "detail", fmt.Sprintf("entries=%d source=boot", n))
 		}
 	}
+	var feedStatePath string
 	if cfg.CachePersistPath != "" {
 		if err := resolver.LoadCacheSnapshot(cfg.CachePersistPath, cfg); err != nil {
 			slog.Warn("cache snapshot not restored", "error", err.Error())
 		}
-		poolState, h3State, echState := probeStatePaths(cfg.CachePersistPath)
+		poolState, h3State, echState, feedState := probeStatePaths(cfg.CachePersistPath)
+		feedStatePath = feedState
 		if err := pool.LoadState(poolState); err != nil {
 			slog.Warn("pool state not restored", "error", err.Error())
 		}
@@ -87,10 +90,14 @@ func run() error {
 			slog.Warn("ech state not restored", "error", err.Error())
 		}
 	}
+	feedController := hubfeed.NewController(cfg, feedStatePath)
+	if err := feedController.LoadState(); err != nil {
+		slog.Warn("pool feed state not restored", "error", err.Error())
+	}
 
 	// Background tasks, all bound to the same ctx: the public pool feed,
 	// the daily Cloudflare range refresh and the periodic cache snapshot.
-	if err := hubfeed.Start(ctx, cfg); err != nil {
+	if err := feedController.Start(ctx); err != nil {
 		slog.Warn("pool feed not started", "error", err.Error())
 	}
 	go schedule(ctx, cfrangeRefreshInterval, false, func() {
@@ -109,7 +116,7 @@ func run() error {
 	}
 	if cfg.CachePersistPath != "" {
 		go schedule(ctx, cacheSnapshotInterval, false, func() {
-			if err := snapshotAll(cfg); err != nil {
+			if err := snapshotAll(cfg, feedController); err != nil {
 				slog.Warn("periodic snapshot failed", "error", err.Error())
 			}
 		})
@@ -117,12 +124,12 @@ func run() error {
 
 	// Run blocks until the signal cancels ctx (the HTTP server is shut
 	// down inside), then the snapshots close the shutdown order.
-	serveErr := httpapi.New(cfg).Run(ctx)
+	serveErr := httpapi.NewWithFeedController(cfg, feedController).Run(ctx)
 	if serveErr != nil {
 		slog.Error("http service stopped with error", "error", serveErr.Error())
 	}
 	if cfg.CachePersistPath != "" {
-		if err := snapshotAll(cfg); err != nil {
+		if err := snapshotAll(cfg, feedController); err != nil {
 			slog.Warn("shutdown snapshot failed", "error", err.Error())
 		} else {
 			slog.Info("snapshots written", "dir", filepath.Dir(cfg.CachePersistPath))
@@ -152,17 +159,20 @@ func schedule(ctx context.Context, interval time.Duration, runFirst bool, fn fun
 	}
 }
 
-// snapshotAll writes the cache and the three probe-state files.
-func snapshotAll(cfg *config.Config) error {
+// snapshotAll writes the cache and probe/feed state files.
+func snapshotAll(cfg *config.Config, feedController *hubfeed.Controller) error {
 	if err := resolver.SaveCacheSnapshot(cfg.CachePersistPath); err != nil {
 		return err
 	}
-	poolState, h3State, echState := probeStatePaths(cfg.CachePersistPath)
+	poolState, h3State, echState, _ := probeStatePaths(cfg.CachePersistPath)
 	if err := pool.SaveState(poolState); err != nil {
 		return err
 	}
 	if err := h3.SaveState(h3State); err != nil {
 		return err
 	}
-	return ech.SaveState(echState)
+	if err := ech.SaveState(echState); err != nil {
+		return err
+	}
+	return feedController.SaveState()
 }

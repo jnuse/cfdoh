@@ -201,23 +201,104 @@ func TestPreferredLayering(t *testing.T) {
 	clientScope := "58.247.22/24"
 	ispScope := "isp:chinanet"
 
-	// client > isp > national > learned; fill top-up per family
+	// client > isp > national > learned; each family fills independently.
 	mustSet(t, []string{"58.247.22.1", "58.247.22.2"}, []string{"2606:4700::1"}, 600, "probe-client", clientScope)
-	mustSet(t, []string{"1.2.3.4"}, nil, 600, "hub-isp", ispScope)
-	mustSet(t, []string{"5.6.7.8", "5.6.7.9", "5.6.7.10", "5.6.7.11", "5.6.7.12", "5.6.7.13", "5.6.7.14"}, nil, 600, "hub-national", ScopeNational)
-	mustSet(t, []string{"9.9.9.9"}, nil, 600, "probe-default", "")
+	mustSet(t, []string{"1.2.3.4"}, []string{"2606:4700::2", "2606:4700::3"}, 600, "hub-isp", ispScope)
+	mustSet(t, []string{"5.6.7.8", "5.6.7.9", "5.6.7.10", "5.6.7.11"}, []string{"2606:4700::4", "2606:4700::5", "2606:4700::6"}, 600, "hub-national", ScopeNational)
+	mustSet(t, []string{"9.9.9.9", "8.8.8.8", "7.7.7.7", "6.6.6.6", "5.5.5.5", "4.4.4.4", "3.3.3.3", "2.2.2.2"}, []string{"2606:4700::7", "2606:4700::8", "2606:4700::9"}, 600, "probe-default", "")
 
-	pool, err := Preferred(context.Background(), nil, nil, nil, true, cfg, clientScope, ispScope)
+	got, err := Preferred(context.Background(), nil, nil, nil, true, cfg, clientScope, ispScope)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// v4: client 2 + isp 1 + national topped to 6
-	eq(t, pool.IPv4, "58.247.22.1", "58.247.22.2", "1.2.3.4", "5.6.7.8", "5.6.7.9", "5.6.7.10")
-	// v6: client only (national has none, learned has none)
-	eq(t, pool.IPv6, "2606:4700::1")
-	// scope tags the contributing narrow layers (national/learned contribute no scope)
-	if pool.Scope != clientScope+","+ispScope {
-		t.Fatalf("scope = %q", pool.Scope)
+	eq(t, got.IPv4,
+		"58.247.22.1", "58.247.22.2", "1.2.3.4",
+		"5.6.7.8", "5.6.7.9", "5.6.7.10", "5.6.7.11",
+		"9.9.9.9", "8.8.8.8", "7.7.7.7")
+	eq(t, got.IPv6,
+		"2606:4700::1", "2606:4700::2", "2606:4700::3",
+		"2606:4700::4", "2606:4700::5", "2606:4700::6",
+		"2606:4700::7", "2606:4700::8")
+	if got.ServeLimitV4 != DefaultIPv4Limit || got.ServeLimitV6 != DefaultIPv6Limit {
+		t.Fatalf("serve limits = %d/%d, want %d/%d", got.ServeLimitV4, got.ServeLimitV6, DefaultIPv4Limit, DefaultIPv6Limit)
+	}
+	if status := LearnedStatus(); status == nil || len(status.IPv4) != PoolSize {
+		t.Fatalf("learned status must retain PoolSize=%d, got %+v", PoolSize, status)
+	}
+	if got.Scope != clientScope+","+ispScope {
+		t.Fatalf("scope = %q", got.Scope)
+	}
+}
+
+func TestPreferredDeduplicatesEquivalentAddressRepresentations(t *testing.T) {
+	resetPool(t, 1_000_000)
+	clientScope := "58.247.22/24"
+	mustSet(t, []string{"104.16.1.1"}, []string{"2606:4700::1"}, 600, "client", clientScope)
+	mustSet(t,
+		[]string{"104.016.001.001", "104.16.1.2"},
+		[]string{"2606:4700:0000:0000:0000:0000:0000:0001", "2606:4700::2"},
+		600, "isp", "isp:chinanet")
+
+	got, err := Preferred(context.Background(), nil, nil, nil, true, &config.Config{}, clientScope, "isp:chinanet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, got.IPv4, "104.16.1.1", "104.16.1.2")
+	eq(t, got.IPv6, "2606:4700::1", "2606:4700::2")
+}
+
+func TestRemoveIspSource(t *testing.T) {
+	resetPool(t, 1_000_000)
+	mustSet(t, []string{"104.16.1.1"}, nil, 600, "pool-feed", "isp:chinanet")
+	mustSet(t, []string{"104.16.2.1"}, nil, 600, "pool-feed", ScopeNational)
+	mustSet(t, []string{"104.16.3.1"}, nil, 600, "manual", "isp:unicom")
+	mustSet(t, []string{"104.16.4.1"}, nil, 600, "pool-feed", "")
+	mustSet(t, []string{"104.16.5.1"}, nil, 600, "pool-feed", "58.247.22/24")
+
+	before := ContentTag()
+	if removed := RemoveIspSource("pool-feed"); removed != 2 {
+		t.Fatalf("removed = %d, want 2", removed)
+	}
+	if after := ContentTag(); after == before {
+		t.Fatal("removing feed-owned ISP pools must invalidate pool content")
+	}
+	got := map[string]bool{}
+	for _, report := range IspPoolStatus() {
+		got[report.Scope] = true
+	}
+	if got["isp:chinanet"] || got[ScopeNational] || !got["isp:unicom"] {
+		t.Fatalf("remaining ISP scopes = %v", got)
+	}
+	if learned := LearnedStatus(); learned == nil || len(learned.Sources) != 1 || learned.Sources[0].Source != "pool-feed" {
+		t.Fatalf("self-learning pool must not be removed: %+v", learned)
+	}
+	if scoped := ScopedStatus(); len(scoped) != 1 || scoped[0].Scope != "58.247.22/24" {
+		t.Fatalf("client-prefix pool must not be removed: %+v", scoped)
+	}
+	if removed := RemoveIspSource("pool-feed"); removed != 0 {
+		t.Fatalf("second removal = %d, want 0", removed)
+	}
+}
+
+func TestPreferredExplicitAndStaticKeepLegacyServeLimits(t *testing.T) {
+	resetPool(t, 1_000_000)
+	staticV4 := []string{"1.1.1.1", "1.1.1.2", "1.1.1.3", "1.1.1.4", "1.1.1.5", "1.1.1.6", "1.1.1.7"}
+	cfg := &config.Config{CFPreferredIPv4: staticV4}
+
+	got, err := Preferred(context.Background(), nil, nil, nil, false, cfg, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.IPv4) != len(staticV4) || got.ServeLimitV4 != PoolSize {
+		t.Fatalf("static pool = %v, serve limit=%d", got.IPv4, got.ServeLimitV4)
+	}
+	got, err = Preferred(context.Background(), []string{"9.9.9.9"}, nil, nil, false, cfg, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, got.IPv4, "9.9.9.9")
+	if got.ServeLimitV4 != PoolSize {
+		t.Fatalf("explicit serve limit = %d, want %d", got.ServeLimitV4, PoolSize)
 	}
 }
 

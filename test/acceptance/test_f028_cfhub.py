@@ -47,7 +47,7 @@ def feed_doc(pools):
 
 
 class F028CfhubFeedTest(unittest.TestCase):
-    """F-028: 拉取入池, 污染池整池拒绝, 未发布跳过, 每族上限 6, 失败沿用旧池."""
+    """F-028: 拉取入池, 污染池整池拒绝, 未发布跳过, 家族上限 10/8, 失败沿用旧池."""
 
     @classmethod
     def setUpClass(cls):
@@ -203,23 +203,23 @@ class F028CfhubFeedTest(unittest.TestCase):
         finally:
             inst.kill()
 
-    def test_f028_family_cap_six(self):
-        """F-028: 池给 10 地址 → 每族至多 6 条, 顺序 = API 顺序."""
-        ips = ["104.18.60.%d" % i for i in range(1, 11)]
+    def test_f028_family_cap_ten(self):
+        """F-028: 池给 12 个 IPv4 地址 → 保留前 10 条且顺序不变."""
+        ips = ["104.18.60.%d" % i for i in range(1, 13)]
         self._set_feed(feed_doc([("chinanet", True, ips)]))
         inst = self._start_case("f028-cap", "cap")
         try:
-            pool = self._wait_ingested(inst, ips[:6])
-            self.assertEqual(pool.get("IPv4"), ips[:6],
-                             "入池须截取前 6 条且保持 API 顺序")
+            pool = self._wait_ingested(inst, ips[:10])
+            self.assertEqual(pool.get("IPv4"), ips[:10],
+                             "入池须截取前 10 条且保持 API 顺序")
 
             def serving():
                 got = self._query_a(inst, 0x2802, "cap1.example.com")
-                return got if got == set(ips[:6]) else None
+                return got if got == set(ips[:10]) else None
 
             got = self._poll_until(serving, what="浏览器观察到截断后的池")
-            self.assertEqual(got, set(ips[:6]), "服务应答至多 6 条")
-            self.assertNotIn("104.18.60.7", got, "第 7 条及以后不得服务")
+            self.assertEqual(got, set(ips[:10]), "服务应答须保持 10 个可用地址")
+            self.assertNotIn("104.18.60.11", got, "第 11 条及以后不得服务")
         finally:
             inst.kill()
 

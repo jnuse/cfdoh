@@ -21,8 +21,7 @@ import (
 	"github.com/jnuse/cfdoh/internal/wire"
 )
 
-// maxServePerFamily caps how many preferred addresses per family one answer
-// serves (F-009: 每族 ≤ 6).
+// maxServePerFamily is the legacy cap for explicit, static, and unannotated pools.
 const maxServePerFamily = 6
 
 // minECHConfigList is the structural lower bound of an ECHConfigList; shorter
@@ -102,8 +101,8 @@ func RewriteAddresses(resp *wire.Packet, ranges *cfrange.Ranges, p *pool.Pool, c
 	if !UsesCloudflare(resp, ranges) {
 		return resp
 	}
-	v4 := firstN(p.IPv4, maxServePerFamily)
-	v6 := firstN(p.IPv6, maxServePerFamily)
+	v4 := firstN(p.IPv4, effectiveServeLimit(p.ServeLimitV4))
+	v6 := firstN(p.IPv6, effectiveServeLimit(p.ServeLimitV6))
 	resp.Answers = rewriteInRange(cloneAnswers(resp), ranges, v4, v6, cfg.CFDropAAAA)
 	return resp
 }
@@ -242,7 +241,7 @@ func RewriteX(resp, q *wire.Packet, p *pool.Pool, cfg *config.Config) *wire.Pack
 	if !domainMatch(q.Questions[0].Name, cfg.XDomains) {
 		return resp
 	}
-	v4 := firstN(p.IPv4, maxServePerFamily)
+	v4 := firstN(p.IPv4, effectiveServeLimit(p.ServeLimitV4))
 	answers := cloneAnswers(resp)
 	answers = replaceFamily(answers, wire.TypeA, v4)
 	answers = dropType(answers, wire.TypeAAAA)
@@ -540,6 +539,13 @@ func cloneAnswers(resp *wire.Packet) []wire.Record {
 	out := make([]wire.Record, len(resp.Answers))
 	copy(out, resp.Answers)
 	return out
+}
+
+func effectiveServeLimit(limit int) int {
+	if limit > 0 {
+		return limit
+	}
+	return maxServePerFamily
 }
 
 func firstN(values []string, n int) []string {

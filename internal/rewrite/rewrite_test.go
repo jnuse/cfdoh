@@ -338,13 +338,42 @@ func TestRewriteAddresses(t *testing.T) {
 			t.Fatalf("round-trip A = %v, want %v", got, poolBoth.IPv4)
 		}
 	})
-	t.Run("caps family at six", func(t *testing.T) {
+	t.Run("caps unannotated pool at six", func(t *testing.T) {
 		big := &pool.Pool{IPv4: []string{"104.17.1.1", "104.17.1.2", "104.17.1.3", "104.17.1.4", "104.17.1.5", "104.17.1.6", "104.17.1.8"}}
 		cfg := &config.Config{CFRewriteEnabled: true}
 		resp := RewriteAddresses(cfAnswer(), ranges, big, cfg)
 		if got := answerIPs(resp, wire.TypeA); len(got) != 6 || got[5] != "104.17.1.6" {
 			t.Fatalf("A = %v, want first six pool addresses", got)
 		}
+	})
+	t.Run("uses default layered family limits for records and hints", func(t *testing.T) {
+		v4 := []string{"104.17.10.1", "104.17.10.2", "104.17.10.3", "104.17.10.4", "104.17.10.5", "104.17.10.6", "104.17.10.7", "104.17.10.8", "104.17.10.9", "104.17.10.10", "104.17.10.11"}
+		addresses6 := []string{"2606:4700:10::1", "2606:4700:10::2", "2606:4700:10::3", "2606:4700:10::4", "2606:4700:10::5", "2606:4700:10::6", "2606:4700:10::7", "2606:4700:10::8", "2606:4700:10::9"}
+		big := &pool.Pool{IPv4: v4, IPv6: addresses6, ServeLimitV4: 10, ServeLimitV6: 8}
+		cfg := &config.Config{CFRewriteEnabled: true}
+		resp := RewriteAddresses(cfAnswer(), ranges, big, cfg)
+		want4 := v4[:10]
+		want6 := make([]string, 0, 8)
+		for _, ip := range addresses6[:8] {
+			want6 = append(want6, v6(ip))
+		}
+		if got := answerIPs(resp, wire.TypeA); !slices.Equal(got, want4) {
+			t.Fatalf("A = %v, want first 10 addresses", got)
+		}
+		if got := answerIPs(resp, wire.TypeAAAA); !slices.Equal(got, want6) {
+			t.Fatalf("AAAA = %v, want first 8 addresses", got)
+		}
+		for _, record := range resp.Answers {
+			if record.Type != wire.TypeHTTPS {
+				continue
+			}
+			_, hints4, hints6, _ := wire.DescribeHTTPS(&record)
+			if !slices.Equal(hints4, want4) || !slices.Equal(hints6, want6) {
+				t.Fatalf("HTTPS hints = %v/%v, want 10/8 pool addresses", hints4, hints6)
+			}
+			return
+		}
+		t.Fatal("rewritten HTTPS record missing")
 	})
 	t.Run("non cloudflare answer untouched", func(t *testing.T) {
 		cfg := &config.Config{CFRewriteEnabled: true}
@@ -527,6 +556,33 @@ func TestRewriteX(t *testing.T) {
 			t.Fatalf("A = %v, want untouched", got)
 		}
 	})
+}
+
+func TestRewriteXUsesExpandedDefaultLimit(t *testing.T) {
+	loadRanges(t)
+	cfg := &config.Config{XDomains: []string{"x.com"}}
+	v4 := []string{"104.17.20.1", "104.17.20.2", "104.17.20.3", "104.17.20.4", "104.17.20.5", "104.17.20.6", "104.17.20.7", "104.17.20.8", "104.17.20.9", "104.17.20.10", "104.17.20.11"}
+	p := &pool.Pool{IPv4: v4, ServeLimitV4: 10}
+	q := query("x.com", wire.TypeA)
+	resp := &wire.Packet{Questions: q.Questions, Answers: []wire.Record{
+		aRec("x.com", "104.16.1.1", 60),
+		httpsRec("x.com", []string{"104.16.1.1"}, nil, 60),
+	}}
+	out := RewriteX(resp, q, p, cfg)
+	if got := answerIPs(out, wire.TypeA); !slices.Equal(got, v4[:10]) {
+		t.Fatalf("A = %v, want first 10 pool addresses", got)
+	}
+	for _, record := range out.Answers {
+		if record.Type != wire.TypeHTTPS {
+			continue
+		}
+		_, hints4, _, _ := wire.DescribeHTTPS(&record)
+		if !slices.Equal(hints4, v4[:10]) {
+			t.Fatalf("ipv4hint = %v, want first 10 pool addresses", hints4)
+		}
+		return
+	}
+	t.Fatal("rewritten HTTPS record missing")
 }
 
 func TestPinAddresses(t *testing.T) {

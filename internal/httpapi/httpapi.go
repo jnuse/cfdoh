@@ -55,8 +55,13 @@ var ispNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]{1,23}$`)
 
 // Server is the cfdoh HTTP server. It owns the selfcheck report table only;
 // every other state piece belongs to its capability module.
+type FeedController interface {
+	SetEnabled(bool) error
+}
+
 type Server struct {
-	cfg *config.Config
+	cfg            *config.Config
+	feedController FeedController
 
 	selfMu     sync.Mutex
 	selfchecks map[string]*selfcheckReport
@@ -65,7 +70,12 @@ type Server struct {
 
 // New builds a server around one loaded configuration.
 func New(cfg *config.Config) *Server {
-	return &Server{cfg: cfg, selfchecks: make(map[string]*selfcheckReport)}
+	return NewWithFeedController(cfg, nil)
+}
+
+// NewWithFeedController injects the optional global feed control capability.
+func NewWithFeedController(cfg *config.Config, feed FeedController) *Server {
+	return &Server{cfg: cfg, feedController: feed, selfchecks: make(map[string]*selfcheckReport)}
 }
 
 // Run serves until ctx is cancelled (graceful shutdown, 10 s grace) or the
@@ -718,6 +728,7 @@ type preferredPost struct {
 	TTL    int      `json:"ttl"`
 	Source string   `json:"source"`
 	Scope  string   `json:"scope"`
+	CFHub  *bool    `json:"cfhub,omitempty"`
 }
 
 // handleAdminPreferred: GET aggregates every pool and probe state; POST
@@ -733,7 +744,7 @@ func (s *Server) handleAdminPreferred(w http.ResponseWriter, r *http.Request, is
 			return
 		}
 		var req preferredPost
-		if json.Unmarshal(body, &req) != nil || !strings.HasPrefix(req.Scope, "isp:") {
+		if json.Unmarshal(body, &req) != nil || req.CFHub != nil || !strings.HasPrefix(req.Scope, "isp:") {
 			http.Error(w, "hub token may only report isp pools", http.StatusForbidden)
 			return
 		}
@@ -818,6 +829,16 @@ func (s *Server) applyPreferred(w http.ResponseWriter, r *http.Request, req *pre
 				http.Error(w, fmt.Sprintf("address %s outside the Cloudflare ranges", addr), http.StatusBadRequest)
 				return
 			}
+		}
+	}
+	if req.CFHub != nil {
+		if s.feedController == nil {
+			http.Error(w, "pool feed control is unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if err := s.feedController.SetEnabled(*req.CFHub); err != nil {
+			http.Error(w, "failed to update pool feed selection", http.StatusInternalServerError)
+			return
 		}
 	}
 	if err := pool.SetLearned(v4, v6, clamp(req.TTL, 60, 86400), truncate(req.Source, 64), scope); err != nil {

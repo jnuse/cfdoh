@@ -1,8 +1,8 @@
 """F-009 Cloudflare 判定与地址改写 — 5 用例 (S-STD + S-DROP).
 
 断言语义真源: .trellis/spec/prd/requirements.md F-009 节.
-CF 站点 A/AAAA 替换为优选池 (每族 ≤6), 多次应答轮转, 非 CF 原样,
-HTTPS 地址提示同步替换, CF_DROP_AAAA 去 AAAA.
+CF 站点 A/AAAA 替换为优选池 (默认学习池 IPv4 ≤10 / IPv6 ≤8; 显式与静态池仍为 6),
+多次应答轮转, 非 CF 原样, HTTPS 地址提示同步替换, CF_DROP_AAAA 去 AAAA.
 """
 
 import base64
@@ -20,7 +20,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CF_V4_LIST = harness.CF_V4_LIST
 CF_V6_LIST = harness.CF_V6_LIST
 
-# 8 地址池: 验证每族服务上限 6
+# 8 地址池: 默认学习池应返回全部地址 (上限 10)
 BIG_POOL = ["104.16.10.%d" % i for i in range(1, 9)]
 
 
@@ -156,7 +156,7 @@ class F009CfRewriteTest(unittest.TestCase):
         return dnscodec.parse_packet(body)
 
     def test_f009_rewrite_all_from_pool(self):
-        """F-009 AC: CF 站点 A 记录全来自池且 ≤6 条."""
+        """F-009 AC: CF 站点 A 记录全来自默认学习池且不超过 10 条."""
         packet = self._query(self.i1, "cf9a.example.com",
                              dnscodec.TYPE_A, 0x9101)
         self.assertEqual(packet["rcode"], 0)
@@ -164,7 +164,8 @@ class F009CfRewriteTest(unittest.TestCase):
         self.assertTrue(got, "CF 站点应答须含 A 记录")
         self.assertTrue(set(got) <= set(BIG_POOL),
                         "A 记录须全部来自池: %r" % got)
-        self.assertLessEqual(len(got), 6, "每族服务上限 6: %r" % got)
+        self.assertEqual(len(got), len(BIG_POOL), "默认学习池应服务全部可用地址: %r" % got)
+        self.assertLessEqual(len(got), 10, "IPv4 默认服务上限 10: %r" % got)
 
     def test_f009_non_cf_passthrough(self):
         """F-009 AC: 非 CF 站点应答与上游语义一致."""
@@ -201,7 +202,7 @@ class F009CfRewriteTest(unittest.TestCase):
             hints = rec["params"].get(dnscodec.SVC_IPV4HINT)
             self.assertTrue(
                 hints and set(hints) <= set(BIG_POOL)
-                and len(hints) <= 6,
+                and len(hints) <= 10,
                 "ipv4hint 须与 A/AAAA 同步替换为池地址: %r" % hints)
 
     def test_f009_drop_aaaa(self):

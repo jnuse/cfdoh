@@ -182,7 +182,7 @@ class F007PoolLayersTest(unittest.TestCase):
         def observed():
             got = set(self._query_a(self.i1, "lay7c.example.com", 0x7001,
                                     xreal="198.51.100.99"))
-            # 优先语义: 专属池地址全部入选; 不足 6 条时允许宽层补足
+            # 优先语义: 专属池地址全部入选; 不足 10 条时允许宽层补足
             if (set(CLIENT_POOL) <= got
                     and got <= set(CLIENT_POOL) | set(NATIONAL_POOL)):
                 return got
@@ -222,7 +222,7 @@ class F007PoolLayersTest(unittest.TestCase):
             if (set(CLIENT_POOL) <= got
                     and got & set(NATIONAL_POOL)
                     and got <= set(CLIENT_POOL) | set(NATIONAL_POOL)
-                    and len(got) <= 6):
+                    and len(got) <= 10):
                 return got
             return None
 

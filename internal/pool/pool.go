@@ -25,9 +25,11 @@ var now = func() int64 { return time.Now().UnixMilli() }
 
 // Pool is the resolved preferred pool for one request.
 type Pool struct {
-	IPv4  []string
-	IPv6  []string
-	Scope string // narrower scopes that contributed, comma-joined
+	IPv4         []string
+	IPv6         []string
+	Scope        string // narrower scopes that contributed, comma-joined
+	ServeLimitV4 int
+	ServeLimitV6 int
 }
 
 // SourceStatus is one self-learning source's report.
@@ -177,8 +179,37 @@ func SetLearned(ipv4, ipv6 []string, ttl int, source, scope string) error {
 	return nil
 }
 
-// activeLearned merges the nationwide self-learning sources at read time.
+// RemoveIspSource removes every ISP/nationwide entry written by source.
+// It uses the normal mutation path so ContentTag reflects the removal.
+func RemoveIspSource(source string) int {
+	if source == "" {
+		return 0
+	}
+	removed := 0
+	mutate(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for element := ispPools.order.Front(); element != nil; {
+			next := element.Next()
+			scope := element.Value.(string)
+			if entry := ispPools.entries[scope]; entry != nil && entry.source == source {
+				delete(ispPools.entries, scope)
+				ispPools.order.Remove(element)
+				removed++
+			}
+			element = next
+		}
+	})
+	return removed
+}
+
+// activeLearned merges the nationwide self-learning sources at read time
+// using the legacy PoolSize for status and compatibility callers.
 func activeLearned() *learnedPool {
+	return activeLearnedWithLimits(PoolSize, PoolSize)
+}
+
+func activeLearnedWithLimits(limitV4, limitV6 int) *learnedPool {
 	var pools []*learnedPool
 	for _, pool := range defaults.snapshot() {
 		if pool.expiresAt > now() {
@@ -196,8 +227,8 @@ func activeLearned() *learnedPool {
 		lists6[i] = pool.ipv6
 		merged.expiresAt = maxInt64(merged.expiresAt, pool.expiresAt)
 	}
-	merged.ipv4 = CombineRankings(lists4, PoolSize)
-	merged.ipv6 = CombineRankings(lists6, PoolSize)
+	merged.ipv4 = CombineRankings(lists4, limitV4)
+	merged.ipv6 = CombineRankings(lists6, limitV6)
 	return merged
 }
 
@@ -217,8 +248,8 @@ type poolLayer struct {
 // Preferred resolves the preferred pool for one request. Layer order
 // (narrow first): client-prefix pool → operator pool → hub nationwide pool
 // → self-learning pool; explicit request parameters skip all four. Each
-// family fills independently to PoolSize; when no learned layer is active
-// the preferred domains (or the static config) provide the pool.
+// family fills independently; default learned layers may use the expanded
+// family limits, while preferred domains and static config keep PoolSize.
 func Preferred(ctx context.Context, explicitV4, explicitV6, domains []string, usingDefault bool, cfg *config.Config, clientScope, ispScope string) (*Pool, error) {
 	ipv4 := explicitV4
 	if ipv4 == nil {
@@ -246,7 +277,7 @@ func Preferred(ctx context.Context, explicitV4, explicitV6, domains []string, us
 				layers = append(layers, poolLayer{pool, ""})
 			}
 		}
-		if nationwide := activeLearned(); nationwide != nil {
+		if nationwide := activeLearnedWithLimits(DefaultIPv4Limit, DefaultIPv6Limit); nationwide != nil {
 			layers = append(layers, poolLayer{nationwide, ""})
 		}
 	}
@@ -254,15 +285,18 @@ func Preferred(ctx context.Context, explicitV4, explicitV6, domains []string, us
 
 	var used []string
 	usedSet := make(map[string]bool)
+	serveLimitV4, serveLimitV6 := PoolSize, PoolSize
 	if len(layers) > 0 {
 		if explicitV4 == nil {
-			if filled := fillFamily(layers, false, &used, usedSet); filled != nil {
+			if filled := fillFamily(layers, false, DefaultIPv4Limit, &used, usedSet); filled != nil {
 				ipv4 = filled
+				serveLimitV4 = DefaultIPv4Limit
 			}
 		}
 		if explicitV6 == nil && !cfg.CFDropAAAA {
-			if filled := fillFamily(layers, true, &used, usedSet); filled != nil {
+			if filled := fillFamily(layers, true, DefaultIPv6Limit, &used, usedSet); filled != nil {
 				ipv6 = filled
+				serveLimitV6 = DefaultIPv6Limit
 			}
 		}
 	} else if len(domains) > 0 && (explicitV4 == nil || explicitV6 == nil) {
@@ -280,12 +314,15 @@ func Preferred(ctx context.Context, explicitV4, explicitV6, domains []string, us
 	if cfg.CFDropAAAA {
 		ipv6 = []string{}
 	}
-	return &Pool{IPv4: ipv4, IPv6: ipv6, Scope: strings.Join(used, ",")}, nil
+	return &Pool{
+		IPv4: ipv4, IPv6: ipv6, Scope: strings.Join(used, ","),
+		ServeLimitV4: serveLimitV4, ServeLimitV6: serveLimitV6,
+	}, nil
 }
 
-// fillFamily walks the layers narrow→wide, topping the family up to
-// PoolSize with addresses the wider layers add.
-func fillFamily(layers []poolLayer, v6 bool, used *[]string, usedSet map[string]bool) []string {
+// fillFamily walks the layers narrow→wide, topping the family up to limit
+// with addresses the wider layers add.
+func fillFamily(layers []poolLayer, v6 bool, limit int, used *[]string, usedSet map[string]bool) []string {
 	var out []string
 	included := make(map[string]bool)
 	for _, layer := range layers {
@@ -295,10 +332,11 @@ func fillFamily(layers []poolLayer, v6 bool, used *[]string, usedSet map[string]
 		}
 		added := 0
 		for _, addr := range family {
-			if included[addr] || len(out) >= PoolSize {
+			identity := addressIdentity(addr, v6)
+			if included[identity] || len(out) >= limit {
 				continue
 			}
-			included[addr] = true
+			included[identity] = true
 			out = append(out, addr)
 			added++
 		}
@@ -306,7 +344,7 @@ func fillFamily(layers []poolLayer, v6 bool, used *[]string, usedSet map[string]
 			usedSet[layer.scope] = true
 			*used = append(*used, layer.scope)
 		}
-		if len(out) >= PoolSize {
+		if len(out) >= limit {
 			break
 		}
 	}
@@ -314,6 +352,17 @@ func fillFamily(layers []poolLayer, v6 bool, used *[]string, usedSet map[string]
 		return nil
 	}
 	return out
+}
+
+func addressIdentity(addr string, v6 bool) string {
+	if v6 {
+		if ip, err := wire.ParseIPv6(addr); err == nil {
+			return wire.IPv6String(ip)
+		}
+	} else if ip, err := wire.ParseIPv4(addr); err == nil {
+		return wire.IPv4String(ip)
+	}
+	return addr
 }
 
 type domainAddresses struct {

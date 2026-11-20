@@ -37,6 +37,7 @@ type Config struct {
 	Token  string `json:"token"`
 	Source string `json:"source"`
 	TTL    int    `json:"ttl"`
+	CFHub  *bool  `json:"cfhub,omitempty"`
 	Pools  []Pool `json:"pools"`
 }
 
@@ -146,13 +147,17 @@ func clampTTL(ttl int) int {
 // the entry; the server's error text is surfaced verbatim (e.g. the
 // outside-the-Cloudflare-ranges rejection for isp scopes).
 func Upload(cfg *Config, p *Pool) error {
-	payload, err := json.Marshal(map[string]any{
+	report := map[string]any{
 		"ipv4":   p.IPv4,
 		"ipv6":   p.IPv6,
 		"ttl":    cfg.TTL,
 		"source": cfg.Source,
 		"scope":  p.Scope,
-	})
+	}
+	if cfg.CFHub != nil {
+		report["cfhub"] = *cfg.CFHub
+	}
+	payload, err := json.Marshal(report)
 	if err != nil {
 		return err
 	}
