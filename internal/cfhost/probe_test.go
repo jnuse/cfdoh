@@ -174,3 +174,57 @@ func TestTopByFamily(t *testing.T) {
 		t.Fatal("dead sweep should have no top")
 	}
 }
+
+func TestProbeCandidatesHTTPSDomains(t *testing.T) {
+	withInsecureTLS(t)
+	var requests []string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS == nil || r.TLS.ServerName != r.Host {
+			t.Errorf("TLS SNI / Host mismatch: TLS=%v Host=%q", r.TLS, r.Host)
+		}
+		requests = append(requests, r.Host+r.URL.Path)
+		switch r.Host {
+		case "bad.example.com":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte("error code: 1034"))
+		case "redirect.example.com":
+			w.Header().Set("Location", "https://elsewhere.invalid/")
+			w.WriteHeader(http.StatusFound)
+		default:
+			_, _ = w.Write([]byte("ok"))
+		}
+	}))
+	defer srv.Close()
+	_, port, err := net.SplitHostPort(srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := probeOptions{sni: "probe.example.com", port: port, concurrency: 1, rounds: 1, timeoutMs: 2000,
+		https: []string{"ok.example.com", "bad.example.com"}}
+	addrs := []netip.Addr{netip.MustParseAddr("127.0.0.1")}
+	if got := probeCandidates(context.Background(), addrs, opts); got[0].ok {
+		t.Fatal("candidate serving 403 for one configured domain must fail")
+	}
+	if strings.Join(requests, ",") != "ok.example.com/,bad.example.com/" {
+		t.Fatalf("requests = %v", requests)
+	}
+	requests = nil
+	opts.https = []string{"redirect.example.com"}
+	if got := probeCandidates(context.Background(), addrs, opts); !got[0].ok {
+		t.Fatal("redirect should pass without following another host")
+	}
+	if strings.Join(requests, ",") != "redirect.example.com/" {
+		t.Fatalf("unexpected redirect requests: %v", requests)
+	}
+}
+
+func TestHTTPSVerifyRejects1034Body(t *testing.T) {
+	withInsecureTLS(t)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("error code: 1034"))
+	}))
+	defer srv.Close()
+	if httpsVerifyDomain(context.Background(), srv.Listener.Addr().String(), "example.com", 2*time.Second) {
+		t.Fatal("1034 error body must be rejected even with a 200 response")
+	}
+}

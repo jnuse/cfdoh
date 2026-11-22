@@ -397,6 +397,7 @@ func (cfg *Config) probeOptions() probeOptions {
 		rounds:      cfg.Rounds,
 		timeoutMs:   cfg.Timeout,
 		httpVerify:  cfg.HTTPVerify,
+		https:       cfg.HTTPS,
 	}
 }
 

@@ -42,10 +42,12 @@ cfhost status       # 当前在用地址 / 上轮测速摘要 / 下次刷新
 ```json
 {
   "managed_domains": ["doh.example.com"],
-  "sources": ["pool:https://cfhub.1molchuan.top/api/v1/pools#national", "domain:cf.090227.xyz"]
+  "sources": ["pool:https://cfhub.1molchuan.top/api/v1/pools#national", "domain:cf.090227.xyz"],
+  "https": ["sxsy33.com"]
 }
 ```
 
+- `https` 是可选的待验证域名数组. 测速通过后, 逐个使用候选 IP 直连域名首页; 连接或证书校验失败、HTTP 4xx/5xx 或响应包含 `error code: 1034` 时淘汰该 IP. 接受 2xx/3xx, 不跟随重定向; 此检查独立于 `http_verify`.
 - 只维护 hosts 内 `# BEGIN cfhost` .. `# END cfhost` 区块, 区块外内容逐字节保留; 地址未变化不重写.
 - 安全软件若拦截 hosts 修改需放行 cfhost; 本机代理客户端若分流 DoH 域名需与 hosts 钉住共存, 注意关闭代理对该域名的远程解析.
 - 手动跑一轮: `cfhost run-once`.

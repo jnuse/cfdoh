@@ -28,6 +28,7 @@ type probeOptions struct {
 	rounds      int
 	timeoutMs   int
 	httpVerify  bool
+	https       []string
 }
 
 // newProbeTLSConfig is the production TLS configuration seam: standard
@@ -96,6 +97,14 @@ func probeCandidates(ctx context.Context, addrs []netip.Addr, opts probeOptions)
 			if ok && opts.httpVerify {
 				ok = httpVerifyAddr(ctx, target, opts.sni, timeout)
 			}
+			if ok {
+				for _, domain := range opts.https {
+					if !httpsVerifyDomain(ctx, target, domain, timeout) {
+						ok = false
+						break
+					}
+				}
+			}
 			outcomes[i] = probeOutcome{addr: a, median: med, ok: ok}
 		}(i, a)
 	}
@@ -140,6 +149,43 @@ func httpVerifyAddr(ctx context.Context, target, domain string, timeout time.Dur
 	}
 	return string(body) != "" && (strings.Contains(string(body), "http=crypto") ||
 		(resp.StatusCode >= 200 && resp.StatusCode < 300))
+}
+
+// httpsVerifyDomain checks the domain's root through the candidate address.
+// Redirects are not followed: doing so could test a different host or address.
+func httpsVerifyDomain(ctx context.Context, target, domain string, timeout time.Duration) bool {
+	rctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	transport := &http.Transport{
+		DialTLSContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", target)
+			if err != nil {
+				return nil, err
+			}
+			tlsConn := tls.Client(conn, newProbeTLSConfig(domain))
+			if err := tlsConn.HandshakeContext(ctx); err != nil {
+				conn.Close()
+				return nil, err
+			}
+			return tlsConn, nil
+		},
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	req, err := http.NewRequestWithContext(rctx, http.MethodGet, "https://"+domain+"/", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	return err == nil && resp.StatusCode >= 200 && resp.StatusCode < 400 &&
+		!strings.Contains(strings.ToLower(string(body)), "error code: 1034")
 }
 
 // medianOf returns the lower median of ts.

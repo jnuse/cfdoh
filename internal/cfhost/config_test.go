@@ -368,3 +368,24 @@ func TestHostsIPsClampAndEnv(t *testing.T) {
 		t.Fatalf("in-range hosts_ips must pass through, got %d", cfg.HostsIPs)
 	}
 }
+
+func TestHTTPSDomainsConfig(t *testing.T) {
+	clearEnv(t)
+	path := writeConfigFile(t, `{"managed_domains":["probe.example.com"],"sources":["list:1.1.1.1"],"https":[" site.example.com. ","other.example.com"]}`)
+	t.Setenv("CFHOST_CONFIG", path)
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.HTTPS, ","); got != "site.example.com,other.example.com" {
+		t.Fatalf("https domains = %q", got)
+	}
+	if got := strings.Join(cfg.probeOptions().https, ","); got != "site.example.com,other.example.com" {
+		t.Fatalf("probe https domains = %q", got)
+	}
+	path = writeConfigFile(t, `{"managed_domains":["probe.example.com"],"sources":["list:1.1.1.1"],"https":["https://example.com/"]}`)
+	t.Setenv("CFHOST_CONFIG", path)
+	if _, err := LoadConfig(); err == nil {
+		t.Fatal("URL must be rejected; https entries are domains")
+	}
+}

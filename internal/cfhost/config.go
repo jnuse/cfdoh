@@ -17,6 +17,7 @@ import (
 // milliseconds; Interval is a time.Duration.
 type Config struct {
 	ManagedDomains []string
+	HTTPS          []string
 	Sources        []string
 	Concurrency    int
 	Timeout        int // milliseconds per probe round
@@ -66,6 +67,7 @@ const (
 // 0 / false are legal explicit values.
 type fileConfig struct {
 	ManagedDomains []string `json:"managed_domains"`
+	HTTPS          []string `json:"https"`
 	Sources        []string `json:"sources"`
 	Concurrency    int      `json:"concurrency"`
 	TimeoutMs      int      `json:"timeout_ms"`
@@ -84,6 +86,7 @@ func (fc *fileConfig) applyTo(cfg *Config) {
 	if len(fc.ManagedDomains) > 0 {
 		cfg.ManagedDomains = fc.ManagedDomains
 	}
+	cfg.HTTPS = fc.HTTPS
 	if len(fc.Sources) > 0 {
 		cfg.Sources = fc.Sources
 	}
@@ -258,6 +261,13 @@ func (cfg *Config) normalize() error {
 			return fmt.Errorf("cfhost: invalid managed domain %q", d)
 		}
 		cfg.ManagedDomains[i] = d
+	}
+	for i, domain := range cfg.HTTPS {
+		domain = strings.TrimSuffix(strings.TrimSpace(domain), ".")
+		if !validDomain(domain) {
+			return fmt.Errorf("cfhost: invalid https domain %q", domain)
+		}
+		cfg.HTTPS[i] = domain
 	}
 	if len(cfg.Sources) < 1 {
 		return fmt.Errorf("cfhost: sources is required (at least one source)")
