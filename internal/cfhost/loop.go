@@ -21,8 +21,10 @@ var runProbes = probeCandidates
 // fetchCandidatesForPass isolates network candidate lookup so RunOnce tests
 // can inject deterministic configured-source and DoH results.
 var fetchCandidatesForPass = func(ctx context.Context, cfg *Config) ([]netip.Addr, bool) {
+	f := *defaultFetcher
+	f.dohEndpoints = [2]string{cfg.DNS1, cfg.DNS2}
 	return fetchCandidatesWithManagedDomains(ctx, cfg.Sources, cfg.ManagedDomains,
-		defaultFetcher, cfg.CandidateLimit, cfg.Concurrency)
+		&f, cfg.CandidateLimit, cfg.Concurrency)
 }
 
 // RunOnce executes one full pass. When every source fails and no previous

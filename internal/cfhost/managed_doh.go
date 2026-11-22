@@ -96,8 +96,8 @@ func slogWarnManagedDNS(domain string, qtype dnsmessage.Type, err error) {
 		"domain", domain, "type", qtype.String(), "error", err.Error())
 }
 
-// queryManagedDNSQuestion uses Ali Public DNS first and retries the same
-// question at Cloudflare only when the first answer is unusable.
+// queryManagedDNSQuestion tries DNS1 first and retries the same question at
+// DNS2 only when the first answer is unusable.
 func queryManagedDNSQuestion(ctx context.Context, f *fetcher, domain string, qtype dnsmessage.Type) ([]netip.Addr, error) {
 	packet, err := packManagedDNSQuestion(domain, qtype)
 	if err != nil {
@@ -105,7 +105,7 @@ func queryManagedDNSQuestion(ctx context.Context, f *fetcher, domain string, qty
 	}
 	encoded := base64.RawURLEncoding.EncodeToString(packet)
 	endpoints := managedDNSEndpoints(f)
-	labels := [...]string{"Ali Public DNS", "Cloudflare DNS"}
+	labels := [...]string{"DNS1", "DNS2"}
 	attemptErrors := make([]error, 0, len(endpoints))
 
 	for index, endpoint := range endpoints {

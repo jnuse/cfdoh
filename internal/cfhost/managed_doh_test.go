@@ -563,3 +563,44 @@ func TestRunOnceFallsBackToPreviousCandidatesWhenCurrentSourcesAreEmpty(t *testi
 		t.Fatalf("fallback probe candidates = %v", got)
 	}
 }
+
+func TestConfiguredDoHEndpointsUsedByPass(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query, err := decodeDoHRequest(r)
+		if err != nil {
+			t.Errorf("decode: %v", err)
+			return
+		}
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		if r.URL.Path == "/first" {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		addr := netip.MustParseAddr("8.8.4.4")
+		if query.Questions[0].Type == dnsmessage.TypeAAAA {
+			addr = netip.MustParseAddr("2001:4860:4860::8888")
+		}
+		answer, _ := testDNSAddressAnswer("probe.example.com", addr)
+		body, _ := packTestDNSResponse(query, dnsmessage.RCodeSuccess, answer)
+		w.Header().Set("Content-Type", "application/dns-message")
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+	previous := defaultFetcher
+	defaultFetcher = insecureFetcher()
+	defer func() { defaultFetcher = previous }()
+	cfg := &Config{Sources: []string{"list:1.1.1.1"}, ManagedDomains: []string{"probe.example.com"}, DNS1: server.URL + "/first", DNS2: server.URL + "/second", CandidateLimit: 10, Concurrency: 1}
+	got, allFailed := fetchCandidatesForPass(context.Background(), cfg)
+	if allFailed || !reflect.DeepEqual(addrStrings(got), []string{"1.1.1.1", "8.8.4.4", "2001:4860:4860::8888"}) {
+		t.Fatalf("candidates = %v, allFailed=%v", got, allFailed)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !reflect.DeepEqual(paths, []string{"/first", "/second", "/first", "/second"}) {
+		t.Fatalf("requests = %v", paths)
+	}
+}

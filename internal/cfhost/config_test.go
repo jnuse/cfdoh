@@ -389,3 +389,37 @@ func TestHTTPSDomainsConfig(t *testing.T) {
 		t.Fatal("URL must be rejected; https entries are domains")
 	}
 }
+
+func TestDoHEndpointConfig(t *testing.T) {
+	clearEnv(t)
+	for _, tc := range []struct {
+		name, fields, dns1, dns2 string
+		bad                      bool
+	}{
+		{"defaults", "", managedDNSAliEndpoint, managedDNSCloudflareEndpoint, false},
+		{"override both", `,"DNS1":"https://one.example/dns-query","DNS2":"https://two.example/dns-query"`, "https://one.example/dns-query", "https://two.example/dns-query", false},
+		{"override primary", `,"DNS1":"https://one.example/dns-query"`, "https://one.example/dns-query", managedDNSCloudflareEndpoint, false},
+		{"insecure", `,"DNS1":"http://one.example/dns-query"`, "", "", true},
+		{"empty", `,"DNS2":""`, "", "", true},
+		{"missing host", `,"DNS1":"https:///dns-query"`, "", "", true},
+		{"credentials", `,"DNS1":"https://user:pass@one.example/dns-query"`, "", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeConfigFile(t, `{"managed_domains":["probe.example.com"],"sources":["list:1.1.1.1"]`+tc.fields+`}`)
+			t.Setenv("CFHOST_CONFIG", path)
+			cfg, err := LoadConfig()
+			if tc.bad {
+				if err == nil {
+					t.Fatal("invalid endpoint accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.DNS1 != tc.dns1 || cfg.DNS2 != tc.dns2 {
+				t.Fatalf("endpoints = %q, %q", cfg.DNS1, cfg.DNS2)
+			}
+		})
+	}
+}

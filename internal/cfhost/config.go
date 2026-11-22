@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,6 +19,8 @@ import (
 type Config struct {
 	ManagedDomains []string
 	HTTPS          []string
+	DNS1           string
+	DNS2           string
 	Sources        []string
 	Concurrency    int
 	Timeout        int // milliseconds per probe round
@@ -68,6 +71,8 @@ const (
 type fileConfig struct {
 	ManagedDomains []string `json:"managed_domains"`
 	HTTPS          []string `json:"https"`
+	DNS1           *string  `json:"DNS1"`
+	DNS2           *string  `json:"DNS2"`
 	Sources        []string `json:"sources"`
 	Concurrency    int      `json:"concurrency"`
 	TimeoutMs      int      `json:"timeout_ms"`
@@ -87,6 +92,12 @@ func (fc *fileConfig) applyTo(cfg *Config) {
 		cfg.ManagedDomains = fc.ManagedDomains
 	}
 	cfg.HTTPS = fc.HTTPS
+	if fc.DNS1 != nil {
+		cfg.DNS1 = *fc.DNS1
+	}
+	if fc.DNS2 != nil {
+		cfg.DNS2 = *fc.DNS2
+	}
 	if len(fc.Sources) > 0 {
 		cfg.Sources = fc.Sources
 	}
@@ -155,6 +166,8 @@ func resolveStatePath() string {
 func LoadConfig() (*Config, error) {
 	path, explicit := configPath()
 	cfg := &Config{
+		DNS1:           managedDNSAliEndpoint,
+		DNS2:           managedDNSCloudflareEndpoint,
 		Concurrency:    defaultConcurrency,
 		Timeout:        defaultTimeoutMs,
 		Rounds:         defaultRounds,
@@ -268,6 +281,16 @@ func (cfg *Config) normalize() error {
 			return fmt.Errorf("cfhost: invalid https domain %q", domain)
 		}
 		cfg.HTTPS[i] = domain
+	}
+	for _, endpoint := range []struct {
+		name  string
+		value *string
+	}{{"DNS1", &cfg.DNS1}, {"DNS2", &cfg.DNS2}} {
+		*endpoint.value = strings.TrimSpace(*endpoint.value)
+		u, err := url.Parse(*endpoint.value)
+		if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
+			return fmt.Errorf("cfhost: %s must be an HTTPS DoH URL without credentials or fragment", endpoint.name)
+		}
 	}
 	if len(cfg.Sources) < 1 {
 		return fmt.Errorf("cfhost: sources is required (at least one source)")
